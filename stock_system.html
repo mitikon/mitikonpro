@@ -1,0 +1,89 @@
+import yfinance as yf
+import pandas as pd
+from sklearn.decomposition import PCA
+import datetime
+import warnings
+
+# yfinanceの不要な警告を非表示にする
+warnings.filterwarnings('ignore')
+
+def fetch_etf_data(tickers, days=100):
+    """Yahoo FinanceからETFの過去データを取得する関数"""
+    print(f"🔄 データを取得中... (対象: {len(tickers)}銘柄)")
+    end_date = datetime.date.today()
+    start_date = end_date - datetime.timedelta(days=days)
+    
+    # yfinanceで一括取得
+    data = yf.download(tickers, start=start_date, end=end_date, progress=False)['Adj Close']
+    return data
+
+def calculate_pca_signals(data):
+    """PCA（主成分分析）を用いて市場の歪み（残差）を計算する関数"""
+    print("🧠 AIエンジン（PCA）が市場の歪みを解析中...")
+    
+    # 欠損値を除外し、日次リターン（変化率）を計算
+    returns = data.pct_change().dropna()
+    
+    # PCAモデルの構築（第1主成分＝市場全体の波 を抽出）
+    pca = PCA(n_components=1)
+    pca.fit(returns)
+    
+    # 市場全体の波から「理論上あるべきリターン」を再構築
+    reconstructed_returns = pca.inverse_transform(pca.transform(returns))
+    reconstructed_df = pd.DataFrame(reconstructed_returns, index=returns.index, columns=returns.columns)
+    
+    # 実際の値と「あるべき値」のズレ（残差）を計算
+    residuals = returns - reconstructed_df
+    
+    # 直近（最新の営業日）の残差を取得
+    latest_residuals = residuals.iloc[-1]
+    return latest_residuals
+
+def main_long_only_system():
+    print("===========================================")
+    print("🇯🇵 日本版ETFシステム 【ロング専用モデル】 起動")
+    print("===========================================\n")
+
+    # TOPIX 17業種ETF（NEXT FUNDS）のティッカーリスト（Yahoo Finance用）
+    jp_etf_tickers = [
+        '1617.T', '1618.T', '1619.T', '1620.T', '1621.T', '1622.T',
+        '1623.T', '1624.T', '1625.T', '1626.T', '1627.T', '1628.T',
+        '1629.T', '1630.T', '1631.T', '1632.T', '1633.T'
+    ]
+
+    try:
+        # 1. データの取得
+        historical_data = fetch_etf_data(jp_etf_tickers)
+        
+        # 2. PCAによるシグナル計算
+        latest_residuals = calculate_pca_signals(historical_data)
+        
+        # 3. ロング（買い）ターゲットの抽出
+        # 残差がマイナス（売られすぎ）のものだけを抽出し、マイナス幅が大きい順に並び替え
+        long_targets = latest_residuals[latest_residuals < 0].sort_values(ascending=True)
+
+        print("\n===========================================")
+        print("🎯 本日の【買い(ロング)】推奨シグナル トップ3")
+        print("===========================================")
+        print("※以下の銘柄は市場全体の波に対して不自然に売られすぎており、反発の期待値が高い状態です。\n")
+
+        if long_targets.empty:
+            print("⚠️ 本日は明確な買いシグナル（売られすぎの歪み）が発生していません。取引を見送ります。")
+        else:
+            # 上位3銘柄を出力
+            top_n = min(3, len(long_targets))
+            for i in range(top_n):
+                ticker = long_targets.index[i].replace('.T', '')
+                score = long_targets.iloc[i]
+                print(f"第{i+1}位: 証券コード 【 {ticker} 】 (歪みスコア: {score:.5f})")
+                
+        print("\n💡 執行ルール: 朝一番（寄り付き）で成行買い ➔ 本日の大引け（15:00直前）で全決済")
+        print("===========================================")
+
+    except Exception as e:
+        print(f"\n❌ エラーが発生しました: {e}")
+        print("データ取得元のネットワーク状況等を確認してください。")
+
+# プログラムの実行
+if __name__ == "__main__":
+    main_long_only_system()

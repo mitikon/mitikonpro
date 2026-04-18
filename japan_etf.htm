@@ -1,0 +1,95 @@
+import streamlit as st
+import yfinance as yf
+import pandas as pd
+from sklearn.decomposition import PCA
+import datetime
+import warnings
+
+# yfinanceの不要な警告を非表示にする
+warnings.filterwarnings('ignore')
+
+# ブラウザのタブ名とレイアウトの設定
+st.set_page_config(page_title="日本版ETF (純正)", layout="centered")
+
+@st.cache_data(ttl=3600) # データを1時間キャッシュして高速化
+def fetch_etf_data(tickers, days=100):
+    end_date = datetime.date.today()
+    start_date = end_date - datetime.timedelta(days=days)
+    data = yf.download(tickers, start=start_date, end=end_date, progress=False)['Adj Close']
+    return data
+
+def calculate_pca_signals(data):
+    returns = data.pct_change().dropna()
+    pca = PCA(n_components=1)
+    pca.fit(returns)
+    reconstructed_returns = pca.inverse_transform(pca.transform(returns))
+    reconstructed_df = pd.DataFrame(reconstructed_returns, index=returns.index, columns=returns.columns)
+    residuals = returns - reconstructed_df
+    return residuals.iloc[-1]
+
+# --- ここからがブラウザ画面の構築（UI） ---
+
+st.title("🇯🇵 日本版ETFシステム")
+st.subheader("【純正ロング・ショートモデル】")
+st.markdown("---")
+
+jp_etf_tickers = [
+    '1617.T', '1618.T', '1619.T', '1620.T', '1621.T', '1622.T',
+    '1623.T', '1624.T', '1625.T', '1626.T', '1627.T', '1628.T',
+    '1629.T', '1630.T', '1631.T', '1632.T', '1633.T'
+]
+
+# 実行ボタンを配置
+if st.button("🚀 最新の市場データを解析する", type="primary"):
+    
+    with st.spinner('データを取得し、AI（PCA）で歪みを計算中...'):
+        try:
+            # 計算処理
+            historical_data = fetch_etf_data(jp_etf_tickers)
+            latest_residuals = calculate_pca_signals(historical_data)
+            
+            # ターゲット抽出
+            long_targets = latest_residuals[latest_residuals < 0].sort_values(ascending=True)
+            short_targets = latest_residuals[latest_residuals > 0].sort_values(ascending=False)
+
+            st.success("解析が完了しました！")
+            
+            # --- 買い（ロング）の表示 ---
+            st.markdown("### 📈 本日の【買い(ロング)】推奨 トップ3")
+            if long_targets.empty:
+                st.warning("⚠️ 買いシグナルなし")
+            else:
+                top_n_long = min(3, len(long_targets))
+                long_results = []
+                for i in range(top_n_long):
+                    ticker = long_targets.index[i].replace('.T', '')
+                    score = long_targets.iloc[i]
+                    long_results.append({"順位": f"第{i+1}位", "証券コード": ticker, "歪みスコア": round(score, 5)})
+                st.table(pd.DataFrame(long_results))
+
+            # --- 空売り（ショート）の表示 ---
+            st.markdown("### 📉 本日の【空売り(ショート)】推奨 トップ3")
+            if short_targets.empty:
+                st.warning("⚠️ 空売りシグナルなし")
+            else:
+                top_n_short = min(3, len(short_targets))
+                short_results = []
+                for i in range(top_n_short):
+                    ticker = short_targets.index[i].replace('.T', '')
+                    score = short_targets.iloc[i]
+                    # ショートのスコアはプラスなので、明示的に+をつける
+                    short_results.append({"順位": f"第{i+1}位", "証券コード": ticker, "歪みスコア": f"+{round(score, 5)}"})
+                st.table(pd.DataFrame(short_results))
+
+            # --- 執行ルールの表示 ---
+            st.info("""
+            💡 **執行ルール:**
+            1. 朝一番（寄り付き）で上記ペアを同時に「信用買い」と「信用売り（空売り）」で約定させる。
+            2. 資金配分はロングとショートで**同額**（例: 買い100万円、売り100万円）にする。
+            3. 本日の大引け（15:00直前）ですべて決済（反対売買）し、ポジションを閉じる。
+            """)
+
+        except Exception as e:
+            st.error(f"❌ エラーが発生しました: {e}")
+else:
+    st.write("上のボタンを押して解析を開始してください。")

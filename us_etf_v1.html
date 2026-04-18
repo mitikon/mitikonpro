@@ -1,0 +1,105 @@
+import streamlit as st
+import yfinance as yf
+import pandas as pd
+from sklearn.decomposition import PCA
+import datetime
+import pytz
+import warnings
+
+# yfinanceの不要な警告を非表示にする
+warnings.filterwarnings('ignore')
+
+# ブラウザのタブ名とレイアウトの設定
+st.set_page_config(page_title="米国版ETF (23時間対応)", layout="centered")
+
+def get_synthetic_close_time():
+    """仮想終値（スナップショット取得時刻）を日本時間で取得"""
+    jst = pytz.timezone('Asia/Tokyo')
+    now_jst = datetime.datetime.now(jst)
+    return now_jst.strftime('%Y-%m-%d %H:%M:%S')
+
+@st.cache_data(ttl=3600) # データを1時間キャッシュして高速化
+def fetch_us_etf_data(tickers, days=100):
+    end_date = datetime.date.today()
+    start_date = end_date - datetime.timedelta(days=days)
+    data = yf.download(tickers, start=start_date, end=end_date, progress=False)['Adj Close']
+    return data
+
+def calculate_pca_signals(data):
+    returns = data.pct_change().dropna()
+    pca = PCA(n_components=1)
+    pca.fit(returns)
+    reconstructed_returns = pca.inverse_transform(pca.transform(returns))
+    reconstructed_df = pd.DataFrame(reconstructed_returns, index=returns.index, columns=returns.columns)
+    residuals = returns - reconstructed_df
+    return residuals.iloc[-1]
+
+# --- ここからがブラウザ画面の構築（UI） ---
+
+st.title("🇺🇸 米国版ETFシステム")
+st.subheader("【23時間市場対応・試作運用モデル】")
+st.markdown("---")
+
+# 米国 S&P500 11セクターETF（SPDRシリーズ）
+us_sector_tickers = [
+    'XLB', 'XLC', 'XLE', 'XLF', 'XLI', 'XLK', 'XLP', 'XLRE', 'XLU', 'XLV', 'XLY'
+]
+
+# 実行ボタンを配置
+if st.button("🚀 米国市場のデータを解析する", type="primary"):
+    
+    with st.spinner('太平洋（米国市場）のデータを取得し、AIが歪みを解析中...'):
+        try:
+            # 仮想終値の取得と表示
+            snapshot_time = get_synthetic_close_time()
+            st.info(f"⏱️ **仮想終値スナップショット時刻:** {snapshot_time} (JST)")
+            
+            # 計算処理
+            historical_data = fetch_us_etf_data(us_sector_tickers)
+            latest_residuals = calculate_pca_signals(historical_data)
+            
+            # ターゲット抽出
+            long_targets = latest_residuals[latest_residuals < 0].sort_values(ascending=True)
+            short_targets = latest_residuals[latest_residuals > 0].sort_values(ascending=False)
+
+            st.success("解析が完了しました！")
+            
+            # --- 買い（ロング）の表示 ---
+            st.markdown("### 📈 本日の【買い(ロング)】推奨 米国セクター")
+            if long_targets.empty:
+                st.warning("⚠️ 買いシグナルなし")
+            else:
+                top_n_long = min(3, len(long_targets))
+                long_results = []
+                for i in range(top_n_long):
+                    ticker = long_targets.index[i]
+                    score = long_targets.iloc[i]
+                    long_results.append({"順位": f"第{i+1}位", "ティッカー": ticker, "歪みスコア": round(score, 5)})
+                st.table(pd.DataFrame(long_results))
+
+            # --- 空売り（ショート）の表示 ---
+            st.markdown("### 📉 本日の【空売り(ショート)】推奨 米国セクター")
+            if short_targets.empty:
+                st.warning("⚠️ 空売りシグナルなし")
+            else:
+                top_n_short = min(3, len(short_targets))
+                short_results = []
+                for i in range(top_n_short):
+                    ticker = short_targets.index[i]
+                    score = short_targets.iloc[i]
+                    short_results.append({"順位": f"第{i+1}位", "ティッカー": ticker, "歪みスコア": f"+{round(score, 5)}"})
+                st.table(pd.DataFrame(short_results))
+
+            # --- 執行ルールの表示 ---
+            st.warning("""
+            💡 **次世代・執行ルール（Duration-Based Exit）:**
+            1. **[エントリー]**: 日本時間の流動性コアタイム（例: 23:00）にペアを同額約定させる。
+            2. **[決済（手仕舞い）]**: 取引所の引け時間に関わらず、エントリーから『厳密に4時間後（または8時間後）』に全決済する。
+            
+            ※この時間指定決済により、23時間市場におけるポジション保有リスクを完全にコントロールします。
+            """)
+
+        except Exception as e:
+            st.error(f"❌ エラーが発生しました: {e}")
+else:
+    st.write("上のボタンを押して解析を開始してください。")

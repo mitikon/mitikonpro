@@ -1,0 +1,178 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>次世代競馬予想システム Ver 3.0 (Absolute Position Model)</title>
+    <style>
+        body { font-family: 'Segoe UI', sans-serif; background-color: #f0f2f5; color: #1a1a1a; margin: 0; padding: 20px; }
+        .container { max-width: 1000px; margin: auto; background: #fff; padding: 30px; border-radius: 12px; box-shadow: 0 10px 30px rgba(0,0,0,0.1); }
+        h1 { text-align: center; color: #1e3a8a; border-bottom: 3px solid #1e3a8a; padding-bottom: 10px; margin-bottom: 30px; }
+        
+        .setup-box { background: #eff6ff; padding: 20px; border-radius: 8px; border: 1px solid #dbeafe; margin-bottom: 25px; }
+        .instruction { font-size: 14px; color: #1e40af; margin-bottom: 15px; line-height: 1.6; }
+        
+        .copy-btn {
+            display: block; margin: 0 auto 20px; background: #2563eb; color: white; border: none;
+            padding: 12px 24px; font-size: 16px; font-weight: bold; border-radius: 6px; cursor: pointer; transition: 0.3s;
+        }
+        .copy-btn:hover { background: #1d4ed8; }
+
+        textarea { 
+            width: 100%; padding: 15px; border: 2px solid #cbd5e1; border-radius: 8px; 
+            font-family: monospace; font-size: 14px; box-sizing: border-box; resize: vertical;
+        }
+
+        .btn-group { display: flex; gap: 15px; justify-content: center; margin-top: 25px; }
+        .action-btn { padding: 18px 35px; font-size: 18px; font-weight: bold; border-radius: 8px; cursor: pointer; border: none; transition: 0.2s; }
+        .calc-btn { background: #dc2626; color: white; }
+        .calc-btn:hover { background: #b91c1c; transform: translateY(-2px); }
+        .reset-btn { background: #64748b; color: white; }
+
+        #results { margin-top: 40px; display: none; }
+        .judgement-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; margin-bottom: 30px; }
+        .j-box { padding: 25px; border-radius: 12px; text-align: center; border: 4px solid; }
+        .win-box { border-color: #fbbf24; background: #fffbeb; }
+        .place-box { border-color: #ef4444; background: #fef2f2; }
+        .j-label { font-size: 18px; font-weight: bold; margin-bottom: 10px; color: #374151; }
+        .j-horse { font-size: 48px; font-weight: 900; color: #000; }
+
+        table { width: 100%; border-collapse: collapse; margin-top: 20px; background: white; }
+        th, td { padding: 12px; border: 1px solid #e2e8f0; text-align: center; }
+        th { background: #1e3a8a; color: white; }
+        .log-text { text-align: left; font-size: 12px; color: #475569; }
+        .score-val { font-weight: bold; color: #dc2626; font-size: 16px; }
+    </style>
+</head>
+<body>
+
+<div class="container">
+    <h1>次世代競馬予想システム Ver 3.0</h1>
+
+    <div class="setup-box">
+        <div class="instruction">
+            <strong>【Ver 3.0 運用フロー】</strong><br>
+            1. 下のボタンでAI指示文をコピーし、Netkeibaの展開画像・亀谷・JRA画像をAIに送信。<br>
+            2. 出力されたデータを下の欄に貼り付け「投資判断を実行」を押してください。
+        </div>
+        <button class="copy-btn" onclick="copyPrompt()">📋 AI用データ抽出指示文をコピー</button>
+        <textarea id="csv-input" rows="10" placeholder="ここにCSVデータを貼り付けてください..."></textarea>
+    </div>
+
+    <div class="btn-group">
+        <button class="action-btn calc-btn" onclick="runAnalysis()">🎯 投資判断を実行 (Ver 3.0エンジン)</button>
+        <button class="action-btn reset-btn" onclick="resetAll()">リセット</button>
+    </div>
+
+    <div id="results">
+        <div class="judgement-grid">
+            <div class="j-box win-box">
+                <div class="j-label">🏆 単勝推奨（物理能力×期待値）</div>
+                <div class="j-horse" id="win-res">該当無し</div>
+            </div>
+            <div class="j-box place-box">
+                <div class="j-label">🥈 複勝推奨（ゴールデンゾーン合致度）</div>
+                <div class="j-horse" id="place-res">該当無し</div>
+            </div>
+        </div>
+
+        <h3>📝 解析スコア詳細</h3>
+        <table id="score-table">
+            <thead>
+                <tr>
+                    <th>馬番</th>
+                    <th>総合スコア</th>
+                    <th>判定ログ（物理エンジン & 期待値解析）</th>
+                </tr>
+            </thead>
+            <tbody id="score-body"></tbody>
+        </table>
+    </div>
+</div>
+
+<script>
+function copyPrompt() {
+    const p = `以下の画像から全10項目のCSVデータを作成してください。
+1行目:レース名。2行目以降:
+馬番,単勝率,単勝回収率,複勝率,複勝回収率,条件別単勝回収率,条件別複勝回収率,上がり3F平均順位,4角ポジション適合度,推進力スコア
+
+※4角ポジション適合度:ヒートマップの緑ゾーンなら5、圏外なら1。
+※推進力スコア:道中で位置を上げているか、好位で力が残っている馬を5段階で。`;
+    navigator.clipboard.writeText(p);
+    alert("指示文をコピーしました。");
+}
+
+function runAnalysis() {
+    const input = document.getElementById('csv-input').value.trim();
+    if(!input) return;
+
+    const lines = input.split('\n');
+    const data = [];
+    const startIndex = lines[0].includes(',') ? 0 : 1;
+
+    for(let i=startIndex; i<lines.length; i++) {
+        const c = lines[i].split(',');
+        if(c.length < 10) continue;
+
+        let d = {
+            num: c[0], winR: parseFloat(c[1]), winRet: parseFloat(c[2]),
+            plaR: parseFloat(c[3]), plaRet: parseFloat(c[4]),
+            cWinRet: parseFloat(c[5]), cPlaRet: parseFloat(c[6]),
+            up3: parseFloat(c[7]), pos: parseFloat(c[8]), push: parseFloat(c[9])
+        };
+
+        // 異常値（ノイズ）フィルター：300%超えは事故としてリセット
+        if(d.winRet > 300) d.winRet = 80;
+        if(d.plaRet > 300) d.plaRet = 70;
+
+        let score = 0;
+        let log = "";
+
+        // 1. 期待値ベース
+        score += d.winRet * 0.5 + d.plaRet * 0.5;
+        log += `ベース期待値:${score.toFixed(0)} `;
+
+        // 2. 物理エンジン（Netkeiba AI融合）
+        if(d.pos >= 4) {
+            score += 40;
+            log += `🎯ゴールデンゾーン(+40) `;
+        } else if(d.pos <= 2) {
+            score -= 30;
+            log += `⚠️絶望ポジション(-30) `;
+        }
+
+        if(d.push >= 4) {
+            score += 30;
+            log += `🚀推進力優秀(+30) `;
+        }
+
+        // 3. 末脚の真贋判定
+        if(d.up3 <= 3.0 && d.pos >= 3) {
+            score += 25;
+            log += `🛡️末脚裏付けあり(+25) `;
+        }
+
+        data.push({num: d.num, score: score, log: log});
+    }
+
+    data.sort((a,b) => b.score - a.score);
+
+    const body = document.getElementById('score-body');
+    body.innerHTML = "";
+    data.forEach(r => {
+        body.innerHTML += `<tr><td>${r.num}</td><td class="score-val">${r.score.toFixed(1)}</td><td class="log-text">${r.log}</td></tr>`;
+    });
+
+    document.getElementById('win-res').innerText = data[0].score > 140 ? `馬番 ${data[0].num}` : "該当無し";
+    const pBest = data.filter(r => r.score > 120).slice(0, 2).map(r => r.num);
+    document.getElementById('place-res').innerText = pBest.length ? `馬番 ${pBest.join(' , ')}` : "該当無し";
+    document.getElementById('results').style.display = 'block';
+}
+
+function resetAll() {
+    document.getElementById('csv-input').value = "";
+    document.getElementById('results').style.display = "none";
+}
+</script>
+</body>
+</html>
