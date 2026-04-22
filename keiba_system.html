@@ -2,177 +2,242 @@
 <html lang="ja">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>次世代競馬予想システム Ver 3.0 (Absolute Position Model)</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>次世代競馬金融工学AIシステム</title>
+    <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+JP:wght@400;700;900&display=swap" rel="stylesheet">
     <style>
-        body { font-family: 'Segoe UI', sans-serif; background-color: #f0f2f5; color: #1a1a1a; margin: 0; padding: 20px; }
-        .container { max-width: 1000px; margin: auto; background: #fff; padding: 30px; border-radius: 12px; box-shadow: 0 10px 30px rgba(0,0,0,0.1); }
-        h1 { text-align: center; color: #1e3a8a; border-bottom: 3px solid #1e3a8a; padding-bottom: 10px; margin-bottom: 30px; }
-        
-        .setup-box { background: #eff6ff; padding: 20px; border-radius: 8px; border: 1px solid #dbeafe; margin-bottom: 25px; }
-        .instruction { font-size: 14px; color: #1e40af; margin-bottom: 15px; line-height: 1.6; }
-        
-        .copy-btn {
-            display: block; margin: 0 auto 20px; background: #2563eb; color: white; border: none;
-            padding: 12px 24px; font-size: 16px; font-weight: bold; border-radius: 6px; cursor: pointer; transition: 0.3s;
+        body {
+            font-family: 'Noto Sans JP', sans-serif;
+            background-color: #f0f2f5;
+            margin: 0; padding: 20px;
+            color: #333;
         }
-        .copy-btn:hover { background: #1d4ed8; }
-
-        textarea { 
-            width: 100%; padding: 15px; border: 2px solid #cbd5e1; border-radius: 8px; 
-            font-family: monospace; font-size: 14px; box-sizing: border-box; resize: vertical;
+        .container {
+            max-width: 800px; margin: 0 auto;
+            background: white; border-radius: 12px;
+            padding: 20px; box-shadow: 0 4px 15px rgba(0,0,0,0.05);
+        }
+        h1 { text-align: center; color: #1a365d; font-size: 24px; border-bottom: 3px solid #1a365d; padding-bottom: 10px; }
+        
+        /* 運用フロー枠 */
+        .instruction-box {
+            background-color: #f8faff; border: 1px solid #d0e1f9;
+            border-radius: 8px; padding: 15px; margin-bottom: 20px;
+            font-size: 14px;
+        }
+        .instruction-box p { margin: 5px 0; color: #2b6cb0; font-weight: 700; }
+        
+        /* ボタン類 */
+        .btn {
+            display: block; width: 100%; padding: 15px;
+            border: none; border-radius: 8px; font-size: 16px; font-weight: 700;
+            cursor: pointer; text-align: center; margin-bottom: 10px;
+            color: white; transition: opacity 0.2s;
+        }
+        .btn:active { opacity: 0.8; }
+        .btn-copy { background-color: #3182ce; width: auto; margin: 10px auto; padding: 10px 30px; }
+        .btn-execute { background-color: #e53e3e; margin-top: 15px;}
+        .btn-reset { background-color: #718096; }
+        
+        /* テキストエリア */
+        textarea {
+            width: 100%; height: 180px; padding: 10px;
+            border: 1px solid #cbd5e0; border-radius: 8px;
+            font-size: 14px; box-sizing: border-box; resize: none;
         }
 
-        .btn-group { display: flex; gap: 15px; justify-content: center; margin-top: 25px; }
-        .action-btn { padding: 18px 35px; font-size: 18px; font-weight: bold; border-radius: 8px; cursor: pointer; border: none; transition: 0.2s; }
-        .calc-btn { background: #dc2626; color: white; }
-        .calc-btn:hover { background: #b91c1c; transform: translateY(-2px); }
-        .reset-btn { background: #64748b; color: white; }
-
-        #results { margin-top: 40px; display: none; }
-        .judgement-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; margin-bottom: 30px; }
-        .j-box { padding: 25px; border-radius: 12px; text-align: center; border: 4px solid; }
-        .win-box { border-color: #fbbf24; background: #fffbeb; }
-        .place-box { border-color: #ef4444; background: #fef2f2; }
-        .j-label { font-size: 18px; font-weight: bold; margin-bottom: 10px; color: #374151; }
-        .j-horse { font-size: 48px; font-weight: 900; color: #000; }
-
-        table { width: 100%; border-collapse: collapse; margin-top: 20px; background: white; }
-        th, td { padding: 12px; border: 1px solid #e2e8f0; text-align: center; }
-        th { background: #1e3a8a; color: white; }
-        .log-text { text-align: left; font-size: 12px; color: #475569; }
-        .score-val { font-weight: bold; color: #dc2626; font-size: 16px; }
+        /* レポート結果枠 */
+        #report-area { display: none; margin-top: 30px; }
+        .report-box {
+            background-color: #f8f9fa; border-left: 5px solid #1a365d;
+            padding: 15px; border-radius: 5px; font-weight: 700; margin-bottom: 20px;
+        }
+        
+        /* S〜G ランクカード */
+        .rank-card {
+            border-radius: 12px; padding: 15px 20px; margin-bottom: 10px;
+            display: flex; justify-content: space-between; align-items: center;
+            color: white; box-shadow: 0 4px 10px rgba(0,0,0,0.1);
+        }
+        .bg-S { background: linear-gradient(135deg, #F0C27B 0%, #4B1248 100%); }
+        .bg-A { background: linear-gradient(135deg, #FF416C 0%, #FF4B2B 100%); }
+        .bg-B { background: linear-gradient(135deg, #2193b0 0%, #6dd5ed 100%); }
+        .bg-C { background: linear-gradient(135deg, #bdc3c7 0%, #2c3e50 100%); }
+        .bg-G { background: linear-gradient(135deg, #434343 0%, #000000 100%); }
+        
+        .horse-info { font-size: 16px; font-weight: 700; text-shadow: 1px 1px 2px rgba(0,0,0,0.3); }
+        .rank-badge {
+            font-size: 18px; font-weight: 900; background: rgba(255,255,255,0.25);
+            padding: 5px 15px; border-radius: 8px; text-shadow: 1px 1px 2px rgba(0,0,0,0.3);
+        }
     </style>
 </head>
 <body>
 
 <div class="container">
-    <h1>次世代競馬予想システム Ver 3.0</h1>
-
-    <div class="setup-box">
-        <div class="instruction">
-            <strong>【Ver 3.0 運用フロー】</strong><br>
-            1. 下のボタンでAI指示文をコピーし、Netkeibaの展開画像・亀谷・JRA画像をAIに送信。<br>
-            2. 出力されたデータを下の欄に貼り付け「投資判断を実行」を押してください。
-        </div>
-        <button class="copy-btn" onclick="copyPrompt()">📋 AI用データ抽出指示文をコピー</button>
-        <textarea id="csv-input" rows="10" placeholder="ここにCSVデータを貼り付けてください..."></textarea>
+    <h1>次世代競馬金融工学システム Ver 4.0</h1>
+    
+    <div class="instruction-box">
+        <p>【中川理論・運用フロー】</p>
+        1. 下のボタンでAIへの抽出指示文をコピーし、新規チャットでAIに送信。<br>
+        2. 各種画像（JRA、亀谷、netkeiba）をAIに読み込ませる。<br>
+        3. 出力されたCSVを下の欄に貼り付け、「投資判断を実行」を押す。
+        
+        <button class="btn btn-copy" onclick="copyPrompt()">📋 AI用データ抽出指示文をコピー</button>
     </div>
 
-    <div class="btn-group">
-        <button class="action-btn calc-btn" onclick="runAnalysis()">🎯 投資判断を実行 (Ver 3.0エンジン)</button>
-        <button class="action-btn reset-btn" onclick="resetAll()">リセット</button>
-    </div>
+    <textarea id="csvInput" placeholder="ここにGeminiから出力されたCSVデータを貼り付けてください..."></textarea>
+    
+    <button class="btn btn-execute" onclick="executeAnalysis()">🎯 投資判断を実行 (中川理論エンジン)</button>
+    <button class="btn btn-reset" onclick="resetData()">🗑 リセット</button>
 
-    <div id="results">
-        <div class="judgement-grid">
-            <div class="j-box win-box">
-                <div class="j-label">🏆 単勝推奨（物理能力×期待値）</div>
-                <div class="j-horse" id="win-res">該当無し</div>
-            </div>
-            <div class="j-box place-box">
-                <div class="j-label">🥈 複勝推奨（ゴールデンゾーン合致度）</div>
-                <div class="j-horse" id="place-res">該当無し</div>
-            </div>
-        </div>
-
-        <h3>📝 解析スコア詳細</h3>
-        <table id="score-table">
-            <thead>
-                <tr>
-                    <th>馬番</th>
-                    <th>総合スコア</th>
-                    <th>判定ログ（物理エンジン & 期待値解析）</th>
-                </tr>
-            </thead>
-            <tbody id="score-body"></tbody>
-        </table>
+    <div id="report-area">
+        <h2 style="font-size: 20px; color: #1a365d;">💰 投資判定レポート</h2>
+        <div id="summary-box" class="report-box"></div>
+        <h2 style="font-size: 20px; color: #1a365d; margin-top: 30px;">📋 各馬の解析ステータス</h2>
+        <div id="cards-area"></div>
     </div>
 </div>
 
 <script>
-function copyPrompt() {
-    const p = `以下の画像から全10項目のCSVデータを作成してください。
-1行目:レース名。2行目以降:
-馬番,単勝率,単勝回収率,複勝率,複勝回収率,条件別単勝回収率,条件別複勝回収率,上がり3F平均順位,4角ポジション適合度,推進力スコア
+    // 新規AIに渡す「魔法の指示文（プロンプト）」
+    const aiPrompt = `あなたは金融工学と中川理論（リードラグ効果・部分空間PCA）に基づく競馬データアナリストです。
+添付された画像（JRA公式オッズ、亀谷スマート出馬表、netkeiba AI展開予測）を解析し、以下のルールでCSVデータを出力してください。
 
-※4角ポジション適合度:ヒートマップの緑ゾーンなら5、圏外なら1。
-※推進力スコア:道中で位置を上げているか、好位で力が残っている馬を5段階で。`;
-    navigator.clipboard.writeText(p);
-    alert("指示文をコピーしました。");
-}
+【抽出・算出要件】
+1. 馬番: 抽出対象の馬番
+2. 朝一インプライド確率: 単勝オッズから逆算した市場予測勝率（例: 単勝5.0倍なら 0.20）
+3. JRA複勝オッズ下限: JRA公式の複勝オッズ下限値
+4. 亀谷_血統適性: 画像から読み取る血統・コース適性を1〜5で評価（5が最高）
+5. netkeiba_AI展开適合度: 展開ヒートマップのポジションの良さを1〜5で評価（5が最高）
+6. nakagawa_predicted_edge: 中川理論に基づく期待値の歪み。「真の好走確率 － 朝一インプライド確率」で算出し、オッズが過小評価されている馬ほどプラス値（例: 0.05）、危険な過剰人気馬はマイナス値（例: -0.08）として出力すること。
 
-function runAnalysis() {
-    const input = document.getElementById('csv-input').value.trim();
-    if(!input) return;
+【出力形式】（厳守：挨拶や解説は一切不要。CSVのみを出力すること）
+馬番,朝一インプライド確率,JRA複勝オッズ下限,亀谷_血統適性,netkeiba_AI展开適合度,nakagawa_predicted_edge`;
 
-    const lines = input.split('\n');
-    const data = [];
-    const startIndex = lines[0].includes(',') ? 0 : 1;
-
-    for(let i=startIndex; i<lines.length; i++) {
-        const c = lines[i].split(',');
-        if(c.length < 10) continue;
-
-        let d = {
-            num: c[0], winR: parseFloat(c[1]), winRet: parseFloat(c[2]),
-            plaR: parseFloat(c[3]), plaRet: parseFloat(c[4]),
-            cWinRet: parseFloat(c[5]), cPlaRet: parseFloat(c[6]),
-            up3: parseFloat(c[7]), pos: parseFloat(c[8]), push: parseFloat(c[9])
-        };
-
-        // 異常値（ノイズ）フィルター：300%超えは事故としてリセット
-        if(d.winRet > 300) d.winRet = 80;
-        if(d.plaRet > 300) d.plaRet = 70;
-
-        let score = 0;
-        let log = "";
-
-        // 1. 期待値ベース
-        score += d.winRet * 0.5 + d.plaRet * 0.5;
-        log += `ベース期待値:${score.toFixed(0)} `;
-
-        // 2. 物理エンジン（Netkeiba AI融合）
-        if(d.pos >= 4) {
-            score += 40;
-            log += `🎯ゴールデンゾーン(+40) `;
-        } else if(d.pos <= 2) {
-            score -= 30;
-            log += `⚠️絶望ポジション(-30) `;
-        }
-
-        if(d.push >= 4) {
-            score += 30;
-            log += `🚀推進力優秀(+30) `;
-        }
-
-        // 3. 末脚の真贋判定
-        if(d.up3 <= 3.0 && d.pos >= 3) {
-            score += 25;
-            log += `🛡️末脚裏付けあり(+25) `;
-        }
-
-        data.push({num: d.num, score: score, log: log});
+    // コピー機能
+    function copyPrompt() {
+        navigator.clipboard.writeText(aiPrompt).then(() => {
+            alert("AI用の指示文をクリップボードにコピーしました！\n新規チャットに貼り付けてください。");
+        }).catch(err => {
+            alert("コピーに失敗しました。手動でコピーしてください。");
+        });
     }
 
-    data.sort((a,b) => b.score - a.score);
+    // リセット機能
+    function resetData() {
+        document.getElementById('csvInput').value = '';
+        document.getElementById('report-area').style.display = 'none';
+    }
 
-    const body = document.getElementById('score-body');
-    body.innerHTML = "";
-    data.forEach(r => {
-        body.innerHTML += `<tr><td>${r.num}</td><td class="score-val">${r.score.toFixed(1)}</td><td class="log-text">${r.log}</td></tr>`;
-    });
+    // CSVパースと中川理論ロジック実行
+    function executeAnalysis() {
+        const csvText = document.getElementById('csvInput').value.trim();
+        if (!csvText) {
+            alert("データが入力されていません。");
+            return;
+        }
 
-    document.getElementById('win-res').innerText = data[0].score > 140 ? `馬番 ${data[0].num}` : "該当無し";
-    const pBest = data.filter(r => r.score > 120).slice(0, 2).map(r => r.num);
-    document.getElementById('place-res').innerText = pBest.length ? `馬番 ${pBest.join(' , ')}` : "該当無し";
-    document.getElementById('results').style.display = 'block';
-}
+        const lines = csvText.split('\n');
+        let horses = [];
+        
+        try {
+            // ヘッダーをスキップしてデータ行を処理
+            for (let i = 1; i < lines.length; i++) {
+                if (!lines[i].trim()) continue;
+                const cols = lines[i].split(',');
+                if (cols.length < 6) continue;
 
-function resetAll() {
-    document.getElementById('csv-input').value = "";
-    document.getElementById('results').style.display = "none";
-}
+                let h = {
+                    number: parseInt(cols[0]),
+                    prob: parseFloat(cols[1]),
+                    oddsMin: parseFloat(cols[2]),
+                    kameya: parseInt(cols[3]),
+                    netkeiba: parseInt(cols[4]),
+                    edge: parseFloat(cols[5]),
+                    rank: 'C'
+                };
+
+                // 中川理論 S〜Gランク判定ロジック
+                if (h.edge < -0.05 && h.prob > 0.15) {
+                    h.rank = 'G';
+                } else if (h.edge >= 0.05 && h.netkeiba >= 4 && h.kameya >= 4 && (h.edge / (1.0 / h.oddsMin)) > 1.2) {
+                    h.rank = 'S';
+                } else if (h.edge >= 0.03 && h.netkeiba >= 3) {
+                    h.rank = 'A';
+                } else if (h.edge >= 0.02 || h.netkeiba === 5) {
+                    h.rank = 'B';
+                }
+                horses.push(h);
+            }
+
+            // エッジの高い順にソート
+            horses.sort((a, b) => b.edge - a.edge);
+            generateReport(horses);
+
+        } catch (e) {
+            alert("データの形式エラーです。CSVが正しく貼り付けられているか確認してください。");
+        }
+    }
+
+    // レポートとUIの描画
+    function generateReport(horses) {
+        const s_horses = horses.filter(h => h.rank === 'S');
+        const a_horses = horses.filter(h => h.rank === 'A');
+        const b_horses = horses.filter(h => h.rank === 'B');
+        const g_horses = horses.filter(h => h.rank === 'G');
+
+        let reportHtml = "";
+
+        if (g_horses.length > 0) {
+            const gNums = g_horses.map(h => h.number).join(', ');
+            reportHtml += `<p>⚠️ 危険な人気馬(Gランク)を検出: ${gNums}番 -> 市場の歪み発生中</p>`;
+        }
+
+        let core_horse = null;
+        if (s_horses.length === 1) {
+            core_horse = s_horses[0];
+            reportHtml += `<p>🎯 【絶対軸】Sランク: ${core_horse.number}番 (エッジ予測: ${(core_horse.edge*100).toFixed(1)}%)</p>`;
+        } else if (a_horses.length === 1 && s_horses.length === 0) {
+            core_horse = a_horses[0];
+            reportHtml += `<p>🎯 【積極軸】Aランク: ${core_horse.number}番 (エッジ予測: ${(core_horse.edge*100).toFixed(1)}%)</p>`;
+        } else {
+            reportHtml += `<p style="color:red;">❌ 【ケン推奨】 信頼できる単独軸馬(S/Aランク)が不在です。</p>`;
+        }
+
+        if (core_horse) {
+            let partners = [...s_horses, ...a_horses, ...b_horses].filter(h => h.number !== core_horse.number);
+            partners.sort((a, b) => b.edge - a.edge);
+            partners = partners.slice(0, 2);
+
+            reportHtml += `<hr><p>💰 --- ポートフォリオ（買い目） ---</p>`;
+            reportHtml += `<p>🛡️ 【防衛・複勝】 ${core_horse.number}番 (資金70%)</p>`;
+            
+            if (partners.length > 0) {
+                const pNums = partners.map(h => h.number).join(', ');
+                reportHtml += `<p>⚔️ 【攻撃・ワイド】 ${core_horse.number} - [ ${pNums} ] (資金30%)</p>`;
+            } else {
+                reportHtml += `<p>⚔️ 【攻撃・ワイド】 該当相手なし -> 複勝1点で完全防衛</p>`;
+            }
+        }
+
+        document.getElementById('summary-box').innerHTML = reportHtml;
+
+        // S〜Gランクカードの描画
+        let cardsHtml = "";
+        horses.forEach(h => {
+            const bgClass = ['S', 'A', 'B', 'C', 'G'].includes(h.rank) ? `bg-${h.rank}` : 'bg-C';
+            cardsHtml += `
+            <div class="rank-card ${bgClass}">
+                <div class="horse-info">🏇 ${h.number}番 (エッジ: ${(h.edge*100).toFixed(1)}%)</div>
+                <div class="rank-badge">RANK ${h.rank}</div>
+            </div>`;
+        });
+        
+        document.getElementById('cards-area').innerHTML = cardsHtml;
+        document.getElementById('report-area').style.display = 'block';
+    }
 </script>
+
 </body>
 </html>
