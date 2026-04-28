@@ -1,5 +1,4 @@
-　# ファイル名: koder_master_fusion.py
-# 実行コマンド: streamlit run koder_master_fusion.py
+
 
 import streamlit as st
 import pandas as pd
