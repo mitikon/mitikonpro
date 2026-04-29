@@ -2,6 +2,7 @@ import streamlit as st
 import pandas as pd
 import time
 import random
+import io
 
 # ==========================================
 # 【Koder心臓部】JRA全施行コース別・枠順物理的タイム損益DB
@@ -9,6 +10,7 @@ import random
 COURSE_PHYSICS_DB = {
     '東京_芝_2000m': {1: 0.0, 2: 0.1, 3: 0.3, 4: 0.5, 5: 0.7, 6: 0.9, 7: 1.1, 8: 1.3},
     '東京_芝_1600m': {1: 0.0, 2: 0.1, 3: 0.2, 4: 0.2, 5: 0.3, 6: 0.4, 7: 0.6, 8: 0.8},
+    '東京_ダ_1600m': {1: 0.3, 2: 0.2, 3: 0.1, 4: 0.0, 5: -0.1, 6: -0.2, 7: -0.4, 8: -0.6},
     '中山_芝_2500m': {1: 0.0, 2: 0.2, 3: 0.4, 4: 0.6, 5: 0.8, 6: 1.0, 7: 1.2, 8: 1.5},
     '京都_芝_1600m_外': {1: 0.0, 2: 0.0, 3: 0.1, 4: 0.1, 5: 0.2, 6: 0.2, 7: 0.3, 8: 0.4},
     '阪神_芝_1600m': {1: 0.0, 2: 0.1, 3: 0.1, 4: 0.2, 5: 0.2, 6: 0.3, 7: 0.4, 8: 0.5},
@@ -58,11 +60,11 @@ def run_koder_v40_logic(df, course_name, speed, length_unit):
     return pd.DataFrame(final_output).sort_values(by='必要ハンデ(馬身)').reset_index(drop=True)
 
 # ==========================================
-# 演出用CSS ＆ アニメーション機能
+# UI設定 ＆ 演出機能
 # ==========================================
-def inject_custom_css():
-    # 空白判定エラーを防ぐため、CSSの記述を最適化
-    st.markdown("""
+st.set_page_config(page_title="究極競馬場アプリ Ver 4.0", layout="wide")
+
+st.markdown("""
 <style>
 @keyframes slideUp { from { transform: translateY(100px); opacity: 0; } to { transform: translateY(0); opacity: 1; } }
 @keyframes runHorse { from { transform: translateX(100%); } to { transform: translateX(-100%); } }
@@ -72,15 +74,8 @@ def inject_custom_css():
 .cat-dash { animation: runCat 1s cubic-bezier(0.1, 0.8, 0.1, 1) forwards; font-size: 80px; position: absolute; bottom: 20px; z-index: 100;}
 .stage-box { height: 350px; background-color: #111; border: 4px solid #FF8C00; border-radius: 10px; position: relative; overflow: hidden; padding: 20px; margin-bottom: 20px;}
 </style>
-    """, unsafe_allow_html=True)
+""", unsafe_allow_html=True)
 
-# ==========================================
-# UI設定 ＆ レイアウト
-# ==========================================
-st.set_page_config(page_title="究極競馬場アプリ Ver 4.0", layout="wide")
-inject_custom_css()
-
-# タイトルの修正
 st.markdown("""
 <div style='background-color: #1a1a1a; padding: 20px; border-radius: 10px; border-left: 8px solid #FF4B4B; margin-bottom: 20px;'>
     <h1 style='color: #FF4B4B; margin: 0;'>究極競馬場アプリ Ver 4.0</h1>
@@ -88,7 +83,13 @@ st.markdown("""
 </div>
 """, unsafe_allow_html=True)
 
-# iPadで見やすいようにメイン画面に機能を集約！
+# 入力リセット用のセッション管理
+if 'input_data' not in st.session_state:
+    st.session_state.input_data = ""
+
+def clear_text():
+    st.session_state.input_data = ""
+
 col1, col2 = st.columns([1, 1])
 
 with col1:
@@ -97,108 +98,97 @@ with col1:
     st.code("以下の出馬表画像を読み取り、Ver 4.0解析用のCSVデータを作成してください。\n【必須項目】馬番, 馬名, 枠, ベーススコア", language='text')
 
 with col2:
-    st.markdown("### 📥 2. データの貼り付け")
+    st.markdown("### 📥 2. データの直接貼り付け")
     st.markdown("""
-<div style='border: 4px solid #00FF41; padding: 15px; border-radius: 10px; background-color: rgba(0,255,65,0.05); text-align: center;'>
-    <h4 style='color: #00FF41; margin-top:0;'>👇 ここにGeminiのCSVデータを投入 👇</h4>
+<div style='border: 4px solid #00FF41; padding: 10px; border-radius: 10px 10px 0 0; background-color: rgba(0,255,65,0.05); text-align: center; border-bottom: none;'>
+    <h4 style='color: #00FF41; margin:0;'>👇 ここにGeminiの解析結果を貼り付け 👇</h4>
 </div>
     """, unsafe_allow_html=True)
-    uploaded_file = st.file_uploader("", type=['csv'])
+    pasted_data = st.text_area("", value=st.session_state.input_data, height=150, key="data_area", label_visibility="collapsed", placeholder="馬番,馬名,枠,ベーススコア\n1,馬名A,1,85.0\n...")
+    
+    if st.button("🔄 入力内容をクリア", on_click=clear_text, use_container_width=True):
+        st.rerun()
 
-# 設定メニューはサイドバーに収納
 with st.sidebar:
     st.header("⚙️ 詳細設定")
     target_course = st.selectbox("🎯 解析コース選択", list(COURSE_PHYSICS_DB.keys()))
     speed_val = st.slider("想定秒速 (m/s)", 14.0, 18.0, 16.6)
     len_val = st.number_input("1馬身の定義 (m)", value=2.4)
 
-if uploaded_file is not None:
-    df_input = pd.read_csv(uploaded_file)
-else:
-    df_input = pd.DataFrame([
-        {'馬番': 9, '馬名': '能力1位/中枠', '枠': 4, 'ベーススコア': 85.0},
-        {'馬番': 1, '馬名': '能力3位/最内', '枠': 1, 'ベーススコア': 82.0},
-        {'馬番': 18, '馬名': '能力1位/大外', '枠': 8, 'ベーススコア': 85.0}
-    ])
-
 # ==========================================
-# 🚀 実行＆夢のスーパー特別演出
+# 🚀 解析実行 ＆ 特別演出
 # ==========================================
 if st.button("🏇 究極スーパー特別演出・発走！", type="primary", use_container_width=True):
-    df_final = run_koder_v40_logic(df_input, target_course, speed_val, len_val)
-    
-    is_jackpot = False
-    if len(df_final) >= 2:
-        diff = df_final.iloc[1]['必要ハンデ(馬身)'] - df_final.iloc[0]['必要ハンデ(馬身)']
-        if diff >= 1.5:
-            is_jackpot = True
+    if not pasted_data:
+        st.error("解析データが貼り付けられていません！")
+    else:
+        try:
+            df_input = pd.read_csv(io.StringIO(pasted_data))
+            df_final = run_koder_v40_logic(df_input, target_course, speed_val, len_val)
+            
+            is_jackpot = False
+            if len(df_final) >= 2:
+                diff = df_final.iloc[1]['必要ハンデ(馬身)'] - df_final.iloc[0]['必要ハンデ(馬身)']
+                if diff >= 1.5:
+                    is_jackpot = True
 
-    # --- 演出用コンテナ ---
-    anim_stage = st.empty()
-    
-    # 演出1
-    anim_stage.markdown("""
+            anim_stage = st.empty()
+            
+            # 演出1：旗振り
+            anim_stage.markdown("""
 <div class='stage-box'>
     <div style='text-align: center; color: #FF8C00; font-size: 20px;'>[ SOUND ] 🎺 ピロリロリン♪ (G1 Fanfare)</div>
-    <div class='staff-flag'>
-        <span style='font-size: 40px;'>🔴</span>👨‍💼<span style='font-size: 40px;'>🔴</span><br>
-        <small style='color: #888; font-size: 20px;'>--- 昇降台 ---</small>
-    </div>
+    <div class='staff-flag'><span style='font-size: 40px;'>🔴</span>👨‍💼<span style='font-size: 40px;'>🔴</span><br><small style='color: #888; font-size: 20px;'>--- 昇降台 ---</small></div>
 </div>
-    """, unsafe_allow_html=True)
-    time.sleep(3)
+            """, unsafe_allow_html=True)
+            time.sleep(3)
 
-    # 演出2
-    horse_colors = ["🐎", "🐴", "🎠"]
-    running_horse = random.choice(horse_colors)
-    anim_stage.markdown(f"""
+            # 演出2：疾走
+            horse_colors = ["🐎", "🐴", "🎠"]
+            running_horse = random.choice(horse_colors)
+            anim_stage.markdown(f"""
 <div class='stage-box' style='background-color: #2e8b57;'>
     <div style='text-align: center; color: white; font-size: 20px;'>[ SOUND ] ⚡ ガシャン！！ (Gate Open)</div>
     <div class='horse-run'>{running_horse} 💨</div>
     <div style='text-align: center; color: white; margin-top: 50px; font-size: 24px;'>Now Calculating...</div>
 </div>
-    """, unsafe_allow_html=True)
-    time.sleep(6)
-    
-    # 演出3（大当たり）
-    if is_jackpot:
-        anim_stage.markdown(f"""
+            """, unsafe_allow_html=True)
+            time.sleep(6)
+            
+            # 演出3：大当たり（黒猫）
+            if is_jackpot:
+                anim_stage.markdown(f"""
 <div class='stage-box' style='background-color: #2e8b57;'>
     <div style='text-align: center; color: #FF00FF; font-size: 24px; font-weight: bold;'>[ SOUND ] 🚨 キュイン！キュイン！</div>
     <div class='horse-run'>{running_horse} 💨</div>
     <div class='cat-dash'>🐈‍⬛ 💨💨💨</div>
     <h2 style='text-align: center; color: yellow; text-shadow: 0 0 10px red;'>超濃厚・大当たり確定演出発生！</h2>
 </div>
-        """, unsafe_allow_html=True)
-        time.sleep(3)
+                """, unsafe_allow_html=True)
+                time.sleep(3)
 
-    # 演出4（歓声）
-    anim_stage.markdown("""
+            # 演出4：歓声
+            anim_stage.markdown("""
 <div class='stage-box' style='background-color: #8B0000;'>
     <div style='text-align: center; color: white; font-size: 30px; margin-top: 80px;'>[ SOUND ] 🗣️ ウワーーーッ！！ (大歓声)</div>
     <div style='text-align: center; color: #FFD700; font-size: 50px; font-weight: bold; margin-top: 20px;'>GOAL!!!</div>
 </div>
-    """, unsafe_allow_html=True)
-    time.sleep(2)
+            """, unsafe_allow_html=True)
+            time.sleep(2)
+            anim_stage.empty()
 
-    anim_stage.empty()
-
-    # --- リザルト表示（電光掲示板） ---
-    st.markdown("<h2 style='color: #FF8C00; margin-top: 10px; text-shadow: 0 0 10px rgba(255,140,0,0.5);'>📟 REKKA SCOREBOARD (LED)</h2>", unsafe_allow_html=True)
-    
-    # 暗号漏れを防ぐため、HTMLのインデントを完全に排除！
-    for i, row in df_final.iterrows():
-        border_color = row['color']
-        html_str = f"""
+            # リザルト表示
+            st.markdown("<h2 style='color: #FF8C00; margin-top: 10px; text-shadow: 0 0 10px rgba(255,140,0,0.5);'>📟 REKKA SCOREBOARD (LED)</h2>", unsafe_allow_html=True)
+            for i, row in df_final.iterrows():
+                border_color = row['color']
+                html_str = f"""
 <div style='background-color: #050505; padding: 20px; border-radius: 5px; border-left: 8px solid {border_color}; border-bottom: 2px solid #222; margin-bottom: 10px; display: flex; justify-content: space-between; align-items: center;'>
     <div style='flex: 1.5;'>
         <span style='color: #00FF41; font-size: 1.2em;'>#{row['馬番']} [{row['枠']}枠]</span><br>
         <strong style='font-size: 1.6em; color: white;'>{row['馬名']}</strong>
     </div>
     <div style='flex: 2; text-align: center; background-color: #000; padding: 10px; border: 1px solid #111;'>
-        <span style='color: {border_color}; font-weight: bold; font-size: 2.2em; text-shadow: 0 0 15px {border_color};'>
-            +{row['必要ハンデ(馬身)']} 馬身
-        </span><br>
+        <span style='color: {border_color}; font-weight: bold; font-size: 2.2em; text-shadow: 0 0 15px {border_color};'>+{row['必要ハンデ(馬身)']} 馬身</span><br>
         <small style='color: #444;'>({row['物理状況']})</small>
     </div>
     <div style='flex: 1; text-align: right;'>
@@ -206,4 +196,6 @@ if st.button("🏇 究極スーパー特別演出・発走！", type="primary", 
     </div>
 </div>
 """
-        st.markdown(html_str, unsafe_allow_html=True)
+                st.markdown(html_str, unsafe_allow_html=True)
+        except Exception as e:
+            st.error(f"データの形式が正しくありません。貼り付けた内容を確認してください。\nエラー内容: {e}")
