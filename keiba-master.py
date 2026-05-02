@@ -4,69 +4,100 @@ import io
 import streamlit.components.v1 as components
 
 # ==========================================
-# 内部エンジン（3.5 + 4.0 融合・防弾仕様）
+# 状態管理（確実なデータオールクリア機構）
 # ==========================================
-def calc_hybrid_score(row):
-    # エラーで止まらないための初期値
-    tan_ret, fuku_ret, odds, up3, pos, j_win, bias = 0.0, 0.0, 10.0, 10.0, 3.0, 0.0, 0.0
-    k_rank = 'C'
-    
-    try:
-        if '単回値' in row: tan_ret = float(str(row['単回値']).replace('%', '').strip() or 0)
-        if '複回値' in row: fuku_ret = float(str(row['複回値']).replace('%', '').strip() or 0)
-        if 'オッズ' in row: odds = float(str(row['オッズ']).strip() or 10)
-        if '上がり3F順位' in row: up3 = float(str(row['上がり3F順位']).strip() or 10)
-        
-        # ポジションの文字化け対策
-        if 'ポジション評価' in row:
-            p_val = str(row['ポジション評価']).strip()
+if 'raw_data' not in st.session_state:
+    st.session_state.raw_data = ""
+
+def clear_data_action():
+    # テキストエリアの中身を強制的に空文字にリセット
+    st.session_state.raw_data = ""
+
+# ==========================================
+# コアエンジン（全スコア算出ロジック）
+# ==========================================
+def execute_master_fusion(df_raw):
+    results = []
+    for _, row in df_raw.iterrows():
+        try:
+            # データの安全な取り出し
+            tan_ret = float(str(row.get('単回値', 0)).replace('%', '').strip() or 0)
+            fuku_ret = float(str(row.get('複回値', 0)).replace('%', '').strip() or 0)
+            odds = float(str(row.get('オッズ', 10)).strip() or 10)
+            up3 = float(str(row.get('上がり3F順位', 10)).strip() or 10)
+            
+            # ポジションの文字化け対策（AIが文字を出しても数字に変換）
+            p_val = str(row.get('ポジション評価', 3)).strip()
             if p_val == '逃げ': pos = 4.0
             elif p_val == '先行': pos = 5.0
             elif p_val == '差し': pos = 3.0
             elif p_val in ['追込', '追い込み']: pos = 1.0
             else: pos = float(p_val)
+                
+            j_win = float(str(row.get('騎手勝率', 0)).replace('%', '').strip() or 0)
+            bias = float(str(row.get('枠バイアス(秒)', 0)).strip() or 0)
+            k_rank = str(row.get('亀谷ランク', 'C')).upper().strip()
             
-        if '騎手勝率' in row: j_win = float(str(row['騎手勝率']).replace('%', '').strip() or 0)
-        if '枠バイアス(秒)' in row: bias = float(str(row['枠バイアス(秒)']).strip() or 0)
-        if '亀谷ランク' in row: k_rank = str(row['亀谷ランク']).upper().strip()
-    except Exception:
-        pass # 個別の変換エラーは無視して続行
+            # 馬番・馬名の確保（空白などを除去）
+            baban = int(row.get('馬番', 0))
+            bamei = str(row.get('馬名', '不明')).strip()
+            waku = int(row.get('枠', 0)) if pd.notna(row.get('枠')) else 0
 
-    # DNA: ノイズカット
-    if tan_ret > 300: tan_ret = 80
-    if fuku_ret > 300: fuku_ret = 70
-    
-    val_score = (tan_ret * 0.5) + (fuku_ret * 0.5)
-    spurt_bonus = 25 if (up3 <= 3.0 and pos >= 3.0) else 0
-    rank_bonus = 15 if k_rank == 'A' else 10 if k_rank == 'B' else 5 if k_rank == 'C' else 0
-    
-    return (100 - odds * 0.5) + (val_score * 0.3) + rank_bonus + (j_win * 0.3) + spurt_bonus - (bias * 10)
+        except Exception:
+            continue # 解析不能な行はスキップ
 
-def execute_master_fusion(df_raw):
-    results = [{'馬番': int(r['馬番']), '能力値': calc_hybrid_score(r)} for _, r in df_raw.iterrows()]
-    df_calc = pd.DataFrame(results)
-    
-    df_calc['V35順位'] = df_calc['能力値'].rank(ascending=False, method='min').astype(int)
-    max_score = df_calc['能力値'].max()
-    df_calc['V40馬身'] = round(((max_score - df_calc['能力値']) * 0.1 * 16.6) / 2.4, 1)
-    
-    merged = pd.merge(df_raw, df_calc, on='馬番')
-    final_output = []
-    
-    for _, row in merged.iterrows():
-        r35, h40 = row['V35順位'], row['V40馬身']
-        if r35 <= 2 and h40 <= 1.0: g, l, c, act = "S", "完全無欠の絶対軸", "#d32f2f", "【単勝・複勝】厚め勝負"
-        elif r35 <= 4 and h40 == 0.0: g, l, c, act = "A", "特大のオッズバグ", "#ff9800", "【単勝】妙味狙い"
-        elif r35 == 1 and h40 >= 5.0: g, l, c, act = "B", "危険な人気馬", "#9c27b0", "【見送り】ヒモまで"
-        elif r35 > 6 and h40 > 3.0: g, l, c, act = "C", "完全ノイズ", "#757575", "【消し】購入対象外"
-        else: g, l, c, act = "R", "連下・ヒモ候補", "#0056b3", "【通常】相手候補"
-            
-        final_output.append({'馬番': row['馬番'], '枠': row['枠'], '馬名': row['馬名'], '判定': g, 'ステータス': l, '推奨馬券': act, 'color': c, 'V35': r35, 'V40': h40})
+        # DNA: 旧システムのノイズカット
+        if tan_ret > 300: tan_ret = 80
+        if fuku_ret > 300: fuku_ret = 70
         
-    return pd.DataFrame(final_output).sort_values(by='V35').reset_index(drop=True)
+        # DNA: 評価ボーナス
+        val_score = (tan_ret * 0.5) + (fuku_ret * 0.5)
+        spurt_bonus = 25 if (up3 <= 3.0 and pos >= 3.0) else 0
+        rank_bonus = 15 if k_rank == 'A' else 10 if k_rank == 'B' else 5 if k_rank == 'C' else 0
+        
+        # 【算出1】旧システム評価（バイアス抜きの基礎力）
+        old_score = (100 - odds * 0.5) + (val_score * 0.3) + rank_bonus + (j_win * 0.3) + spurt_bonus
+        
+        # 【算出2】システム3.5評価（枠バイアスを組み込んだ総合期待値）
+        v35_score = old_score - (bias * 10)
+        
+        results.append({
+            '馬番': baban, '枠': waku, '馬名': bamei,
+            '旧評価点': round(old_score, 1),
+            'V35点': round(v35_score, 1)
+        })
+
+    df_calc = pd.DataFrame(results)
+    if df_calc.empty:
+        return df_calc
+    
+    # 【算出3】総合順位とシステム4.0（馬身差）
+    df_calc['総合順位'] = df_calc['V35点'].rank(ascending=False, method='min').astype(int)
+    max_score = df_calc['V35点'].max()
+    df_calc['V40馬身'] = round(((max_score - df_calc['V35点']) * 0.1 * 16.6) / 2.4, 1)
+
+    # 最終判定ロジック
+    final_output = []
+    for _, r in df_calc.iterrows():
+        rank = r['総合順位']
+        hc = r['V40馬身']
+        
+        if rank <= 2 and hc <= 1.0: g, l, c, act = "S", "完全無欠の絶対軸", "#d32f2f", "【単・複】厚め勝負"
+        elif rank <= 4 and hc == 0.0: g, l, c, act = "A", "特大のオッズバグ", "#ff9800", "【単勝】妙味狙い"
+        elif rank == 1 and hc >= 5.0: g, l, c, act = "B", "危険な人気馬", "#9c27b0", "【見送り】ヒモまで"
+        elif rank > 6 and hc > 3.0: g, l, c, act = "C", "完全ノイズ", "#757575", "【消し】購入対象外"
+        else: g, l, c, act = "R", "連下・ヒモ候補", "#0056b3", "【通常】相手候補"
+        
+        final_output.append({
+            '総合順位': rank, '馬番': r['馬番'], '枠': r['枠'], '馬名': r['馬名'], 
+            '判定': g, 'ステータス': l, '推奨馬券': act, 'color': c, 
+            '旧評価点': r['旧評価点'], 'V35点': r['V35点'], 'V40馬身': hc
+        })
+        
+    return pd.DataFrame(final_output).sort_values(by='総合順位').reset_index(drop=True)
 
 # ==========================================
-# UIレイアウト（バグ排除の超シンプル仕様）
+# UIレイアウト（データ開示＆操作性特化）
 # ==========================================
 st.set_page_config(page_title="競馬AI投資システム", layout="centered")
 
@@ -74,42 +105,65 @@ st.markdown("""
 <style>
     .stApp { background-color: #f8f9fa; }
     .main-title { text-align: center; color: #d32f2f; font-weight: 900; font-size: 28px; }
-    div.stButton > button[kind="primary"] { background-color: #d32f2f; color: white; border-radius: 10px; height: 60px; font-size: 20px; font-weight: bold; width: 100%; margin-top: 20px;}
+    
+    /* 巨大な実行ボタンとクリアボタンの装飾 */
+    div.stButton > button[kind="primary"] { background-color: #d32f2f !important; color: white !important; border-radius: 10px !important; height: 70px !important; font-size: 20px !important; font-weight: bold !important; width: 100% !important; border: 3px solid #8b0000 !important; }
+    div.stButton > button[kind="secondary"] { background-color: #6c757d !important; color: white !important; border-radius: 10px !important; height: 70px !important; font-size: 20px !important; font-weight: bold !important; width: 100% !important; border: 3px solid #495057 !important; }
+    
+    /* テキストエリアの赤枠強制 */
+    div[data-baseweb="textarea"] > div { border: 3px solid #d32f2f !important; border-radius: 8px !important; background-color: #fff !important; }
 </style>
 """, unsafe_allow_html=True)
 
 st.markdown("<div class='main-title'>競馬AI投資システム</div>", unsafe_allow_html=True)
-st.markdown("<p style='text-align:center; color:#0056b3; font-weight:bold;'>MASTER FUSION 安定稼働版</p>", unsafe_allow_html=True)
 
-# 1. 巨大コピーボタン（指示文を超強化）
+# --- 1. 巨大コピーボタン ---
 st.info("🔴 以下のボタンで指示文をコピーし、AIに送信してください。")
 copy_html = """
-<button onclick="copyText()" style="background-color:#d32f2f; color:white; border:none; border-radius:30px; padding:15px; font-size:18px; font-weight:bold; width:100%; cursor:pointer;">
-👁 AI用データ解析指示 をコピー
+<button onclick="copyText()" style="background-color:#d32f2f; color:white; border:4px solid #b71c1c; border-radius:30px; padding:15px; font-size:18px; font-weight:bold; width:100%; cursor:pointer; box-shadow: 0 4px 0 #8b0000;">
+👁 AI用データ解析指示 (11項目) をコピー
 </button>
 <script>
 function copyText() {
-    var text = "以下の画像を解析し統合CSVを作成せよ。JRA統計から『枠バイアス(秒)』も独自算出すること。\\n【必須項目】馬番,馬名,枠,オッズ,上がり3F順位,ポジション評価,亀谷ランク,騎手勝率,単回値,複回値,枠バイアス(秒)\\n\\n【絶対遵守ルール】\\n1. コードブロック(
-```)やファイル出力は絶対に行わず、通常のテキスト文字だけで出力すること。\\n2. ポジション評価は「逃げ・先行」などの文字ではなく、必ず「1〜5の数値」に変換して出力すること。";
+    var text = "以下の画像を解析し統合CSVを作成せよ。JRA統計から『枠バイアス(秒)』も独自算出すること。\\n【必須項目】馬番,馬名,枠,オッズ,上がり3F順位,ポジション評価,亀谷ランク,騎手勝率,単回値,複回値,枠バイアス(秒)\\n\\n【絶対遵守ルール】\\n1. コードブロック(```)やファイル出力は絶対に行わず、通常のテキスト文字だけで出力すること。\\n2. ポジション評価は「逃げ・先行」などの文字ではなく、必ず「1〜5の数値」に変換して出力すること。";
     var el = document.createElement('textarea'); el.value = text; document.body.appendChild(el); el.select(); document.execCommand('copy'); document.body.removeChild(el);
     alert("コピーしました。Geminiの入力欄に貼り付けて送信してください。");
 }
 </script>
 """
-components.html(copy_html, height=70)
+components.html(copy_html, height=80)
 
-# 2. データ貼り付けエリア（バグの原因だった装飾を全削除）
-st.markdown("<h4 style='color:#0056b3; margin-top:20px;'>👀 AIが書き出したデータをここに貼り付け</h4>", unsafe_allow_html=True)
-pasted_data = st.text_area("データ入力エリア", height=250, label_visibility="collapsed")
+# --- 2. データ貼り付けエリア ---
+st.markdown("<h4 style='color:#0056b3; margin-top:10px; text-align:center;'>👀 AI抽出データをここに貼り付け 👀</h4>", unsafe_allow_html=True)
 
-# 3. 解析実行
-if st.button("🚀 解析を実行する", type="primary"):
+# セッション状態と連動する確実な入力欄
+pasted_data = st.text_area(
+    "データ入力エリア", 
+    key="raw_data", 
+    height=200, 
+    label_visibility="collapsed",
+    placeholder="馬番,馬名,枠,オッズ,上がり3F順位,ポジション評価,亀谷ランク,騎手勝率,単回値,複回値,枠バイアス(秒)\n（ここにペースト）"
+)
+
+# --- 3. 実行 ＆ オールクリアボタン ---
+st.markdown("<hr style='border:1px solid #ccc; margin: 15px 0;'>", unsafe_allow_html=True)
+col1, col2 = st.columns(2)
+with col1:
+    execute_btn = st.button("🚀 脈動・物理解析を実行", type="primary", use_container_width=True)
+with col2:
+    # 確実に動くデータ消去ボタン
+    clear_btn = st.button("🗑️ データオールクリア", type="secondary", on_click=clear_data_action, use_container_width=True)
+st.markdown("<hr style='border:1px solid #ccc; margin: 15px 0;'>", unsafe_allow_html=True)
+
+# --- 4. 解析実行とフルデータ開示 ---
+if execute_btn:
     if not pasted_data.strip():
         st.error("データが貼り付けられていません。")
     else:
         try:
+            # データのクリーニング（全角スペースや前後の空白を除去して確実に馬名を拾う）
             df_raw = pd.read_csv(io.StringIO(pasted_data.strip()), skipinitialspace=True)
-            df_raw.columns = df_raw.columns.str.strip()
+            df_raw.columns = [str(c).strip().replace('　', '') for c in df_raw.columns]
             
             # 見出しの揺れ補正
             rename_dict = {'枠バイアス': '枠バイアス(秒)', '上がり順位': '上がり3F順位', 'ポジション': 'ポジション評価'}
@@ -119,22 +173,43 @@ if st.button("🚀 解析を実行する", type="primary"):
 
             df_final = execute_master_fusion(df_raw)
             
-            st.markdown("<h3 style='text-align:center; color:#d32f2f; margin-top:30px;'>🎯 投資判定マトリクス</h3>", unsafe_allow_html=True)
-            for _, row in df_final.iterrows():
-                st.markdown(f"""
-                <div style='background:#fff; border-left:10px solid {row['color']}; padding:15px; border-radius:8px; margin-bottom:10px; display:flex; align-items:center; border:1px solid #ccc;'>
-                    <div style='flex:1;'>
-                        <span style='font-size:28px; font-weight:bold; color:{row['color']};'>{row['判定']}</span>
-                        <span style='margin-left:10px; font-weight:bold;'>#{row['馬番']} {row['馬名']}</span>
+            if df_final.empty:
+                st.error("有効なデータが計算できませんでした。")
+            else:
+                st.markdown("<h2 style='text-align:center; color:#d32f2f;'>🎯 投資判定マトリクス</h2>", unsafe_allow_html=True)
+                
+                for _, row in df_final.iterrows():
+                    st.markdown(f"""
+                    <div style='background:#fff; border-left:12px solid {row['color']}; padding:15px; border-radius:8px; margin-bottom:15px; border:2px solid #ddd; box-shadow: 0 4px 6px rgba(0,0,0,0.1);'>
+                        <div style='display:flex; justify-content:space-between; align-items:center; border-bottom:1px solid #eee; padding-bottom:10px; margin-bottom:10px;'>
+                            <div>
+                                <span style='font-size:30px; font-weight:900; color:{row['color']};'>{row['判定']}</span>
+                                <span style='margin-left:15px; font-size:20px; font-weight:bold; color:#111;'>#{row['馬番']} {row['馬名']}</span>
+                                <span style='margin-left:10px; font-size:14px; color:#666;'>({row['枠']}枠)</span>
+                            </div>
+                            <div style='text-align:right;'>
+                                <span style='color:{row['color']}; font-weight:bold; font-size:18px;'>{row['ステータス']}</span><br>
+                                <span style='display:inline-block; background:#e9ecef; border:1px solid #ced4da; padding:4px 8px; font-size:12px; border-radius:4px; margin-top:4px; font-weight:bold;'>{row['推奨馬券']}</span>
+                            </div>
+                        </div>
+                        
+                        <!-- ご指定の全スコア・順位の完全開示エリア -->
+                        <div style='display:flex; justify-content:space-between; font-size:15px; font-weight:bold; color:#333; background:#f8f9fa; padding:10px; border-radius:5px;'>
+                            <div style='flex:1; text-align:center; border-right:1px solid #ccc;'>
+                                🏆 総合順位<br><span style='font-size:22px; color:#d32f2f;'>{row['総合順位']}位</span>
+                            </div>
+                            <div style='flex:1; text-align:center; border-right:1px solid #ccc;'>
+                                旧システム評価<br><span style='font-size:18px; color:#0056b3;'>{row['旧評価点']} 点</span>
+                            </div>
+                            <div style='flex:1; text-align:center; border-right:1px solid #ccc;'>
+                                システム 3.5<br><span style='font-size:18px; color:#0056b3;'>{row['V35点']} 点</span>
+                            </div>
+                            <div style='flex:1; text-align:center;'>
+                                システム 4.0<br><span style='font-size:18px; color:#d32f2f;'>+{row['V40馬身']} 身</span>
+                            </div>
+                        </div>
                     </div>
-                    <div style='flex:1; text-align:center; font-size:14px;'>
-                        V3.5: <b>{row['V35']}位</b> / V4.0: <b>+{row['V40']}身</b>
-                    </div>
-                    <div style='flex:1; text-align:right;'>
-                        <span style='color:{row['color']}; font-weight:bold;'>{row['ステータス']}</span><br>
-                        <span style='font-size:12px; background:#eee; padding:2px 6px;'>{row['推奨馬券']}</span>
-                    </div>
-                </div>
-                """, unsafe_allow_html=True)
+                    """, unsafe_allow_html=True)
+                    
         except Exception as e:
-            st.error("データの読み込みに失敗しました。1行目に「馬番,馬名...」などの項目名が含まれているか確認してください。")
+            st.error("【エラー】AIが出力したデータに「馬番,馬名...」の見出しが含まれているか、余計な文章が入っていないか確認してください。")
