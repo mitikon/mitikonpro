@@ -59,31 +59,40 @@ def execute_fusion(df_raw, df_35, df_40):
     return df_f.sort_values(by=['sort', 'V40ハンデ']).drop(columns=['sort']).reset_index(drop=True)
 
 # ==========================================
-# UI・レイアウト設計（画像レイアウトの再現）
+# セッション状態の完全クリア機能（エラー回避の要）
 # ==========================================
-st.set_page_config(page_title="MASTER FUSION", layout="centered")
+if 'input_data' not in st.session_state:
+    st.session_state['input_data'] = ""
+
+def clear_all_data():
+    st.session_state['input_data'] = ""
+
+# ==========================================
+# UI・レイアウト設計（旧システム完全再現仕様）
+# ==========================================
+st.set_page_config(page_title="競馬AI投資システム", layout="centered")
 
 st.markdown("""
 <style>
-    /* 全体の背景を白基調に */
     .stApp { background-color: #f8f9fa; }
     
-    /* タイトル */
+    /* タイトル周り */
     .main-title { text-align: center; color: #d32f2f; font-weight: 900; font-size: 28px; margin-bottom: 5px; text-shadow: 1px 1px 2px rgba(0,0,0,0.1); }
     .sub-title { text-align: center; color: #0056b3; font-weight: bold; font-size: 16px; margin-bottom: 30px; }
     
-    /* 指示文エリアのヘッダー風 */
-    .instruction-header { background-color: #fff0f5; border: 2px solid #0056b3; border-bottom: none; border-radius: 15px 15px 0 0; padding: 15px; text-align: center; color: #d32f2f; font-weight: bold; }
+    /* 指示文エリア（ピンク背景・青枠） */
+    .instruction-box { background-color: #fff0f5; border: 2px solid #0056b3; border-radius: 15px; padding: 20px; margin-bottom: 30px; }
+    .instruction-text { color: #333; font-size: 14px; font-weight: bold; margin-bottom: 10px; }
+    .red-dot { color: #d32f2f; }
+    .blue-dot { color: #0056b3; }
     
-    /* 貼り付けエリアのヘッダー風 */
-    .input-header { background-color: #e6f2ff; border: 2px solid #0056b3; border-bottom: none; border-radius: 15px 15px 0 0; padding: 15px; text-align: center; color: #d32f2f; font-weight: bold; margin-top: 30px; }
+    /* データ貼り付けエリア（水色背景・青枠） */
+    .input-box { background-color: #e6f2ff; border: 2px solid #0056b3; border-radius: 15px; padding: 20px; margin-bottom: 20px; }
+    .input-header { text-align: center; color: #d32f2f; font-weight: bold; font-size: 16px; margin-bottom: 15px; }
     
-    /* テキストエリアのカスタマイズ（赤枠） */
-    div[data-baseweb="textarea"] > div { border: 2px solid #d32f2f !important; border-radius: 0 0 15px 15px !important; background-color: #ffffff !important; }
+    /* テキストエリア本体を赤枠に */
+    div[data-baseweb="textarea"] > div { border: 2px solid #d32f2f !important; border-radius: 8px !important; background-color: #ffffff !important; }
     textarea { color: #333 !important; font-family: monospace !important; font-size: 14px !important; }
-
-    /* Streamlitコードブロックの余白調整 */
-    div.stCode { margin-bottom: 0px; }
 
     /* 実行ボタン（青地・赤枠） */
     div.stButton > button[kind="primary"] { background-color: #0056b3; color: white; border: 4px solid #d32f2f; border-radius: 30px; font-weight: bold; height: 60px; font-size: 18px; }
@@ -99,33 +108,41 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 st.markdown("<div class='main-title'>競馬AI投資システム</div>", unsafe_allow_html=True)
-st.markdown("<div class='sub-title'>(MASTER FUSION ハイブリッド版)</div>", unsafe_allow_html=True)
+st.markdown("<div class='sub-title'>(MASTER FUSION 復旧版)</div>", unsafe_allow_html=True)
 
-# セッション管理（クリアボタン用）
-if 'input_data' not in st.session_state:
-    st.session_state['input_data'] = ""
+# --- STEP 1: AI指示文エリア（旧システム風） ---
+st.markdown("""
+<div class='instruction-box'>
+    <div class='instruction-text'><span class='red-dot'>●</span> 【警告】最も確実だったシステム4.0の指示文章に復旧しました。</div>
+    <div class='instruction-text'><span class='blue-dot'>●</span> 余計な文章を排除し、AIが確実に反応する文字列のみを使用します。</div>
+    <div class='instruction-text'><span class='red-dot'>●</span> 右上のコピーボタンからコピーし、AIに抽出させてください。</div>
+</div>
+""", unsafe_allow_html=True)
 
-# --- STEP 1: AI指示文エリア ---
-st.markdown("<div class='instruction-header'>🔴 右上のアイコンで指示文をコピーし、AIに抽出させてください</div>", unsafe_allow_html=True)
-st.code("以下の画像を解析し統合CSVを作成せよ。JRA統計から『枠バイアス(秒)』も独自算出すること。\n【必須項目】馬番,馬名,枠,オッズ,上がり3F順位,ポジション評価,亀谷ランク,騎手勝率,単回値,複回値,枠バイアス(秒)\n【重要】1行目に項目名を必ず入れ、解説抜きでCSVデータのみを出力すること。", language="text")
+# 完全に4.0と同一のテキスト（ここが最重要）
+st.code("以下の画像を解析し統合CSVを作成せよ。JRA統計から『枠バイアス(秒)』も独自算出すること。\n【必須項目】馬番,馬名,枠,オッズ,上がり3F順位,ポジション評価,亀谷ランク,騎手勝率,単回値,複回値,枠バイアス(秒)", language="text")
 
-# --- STEP 2: データ貼り付けエリア ---
+# --- STEP 2: データ貼り付けエリア（旧システム風） ---
+st.markdown("<div class='input-box'>", unsafe_allow_html=True)
 st.markdown("<div class='input-header'>👀 AI抽出データ（確実な11項目）をここに貼り付け 👀</div>", unsafe_allow_html=True)
-pasted_data = st.text_area("データ貼り付け", key="input_data", height=200, label_visibility="collapsed", placeholder="馬番,馬名,枠,オッズ,上がり3F順位...\n（ここにデータをペースト）")
 
-st.write("") # スペース調整
+# session_stateを使ってクリア機能を完璧に連動
+pasted_data = st.text_area(
+    "データ貼り付け", 
+    key="input_data", 
+    height=200, 
+    label_visibility="collapsed", 
+    placeholder="馬番,馬名,枠,オッズ,上がり3F順位...\n（ここにデータをペースト）"
+)
+st.markdown("</div>", unsafe_allow_html=True)
 
 # --- STEP 3: 実行＆クリアボタン ---
 col1, col2 = st.columns(2)
 with col1:
-    run_btn = st.button("🚀 フュージョン解析を実行", type="primary", use_container_width=True)
+    run_btn = st.button("🚀 脈動・フュージョン解析を実行", type="primary", use_container_width=True)
 with col2:
-    clear_btn = st.button("🗑️ 全クリア", type="secondary", use_container_width=True)
-
-# クリア処理
-if clear_btn:
-    st.session_state['input_data'] = ""
-    st.rerun()
+    # on_clickを使うことで、エラーを起こさずに確実に全クリアする
+    clear_btn = st.button("🗑️ 全クリア", type="secondary", use_container_width=True, on_click=clear_all_data)
 
 # --- STEP 4: 解析と結果表示 ---
 if run_btn:
@@ -137,7 +154,7 @@ if run_btn:
             df_raw = pd.read_csv(io.StringIO(pasted_data.strip()), skipinitialspace=True)
             df_raw.columns = df_raw.columns.str.strip()
             
-            # 項目名の揺れ補正
+            # 項目名の揺れ補正（念のため）
             col_map = {'枠バイアス': '枠バイアス(秒)', '上がり順位': '上がり3F順位', 'ポジション': 'ポジション評価'}
             for old, new in col_map.items():
                 if old in df_raw.columns and new not in df_raw.columns:
@@ -148,7 +165,7 @@ if run_btn:
             df_40 = run_v40(df_raw)
             df_final = execute_fusion(df_raw, df_35, df_40)
             
-            st.markdown("<h3 style='text-align:center; color:#333; margin-top:30px;'>🎯 投資判定マトリクス</h3>", unsafe_allow_html=True)
+            st.markdown("<h3 style='text-align:center; color:#d32f2f; margin-top:30px; font-weight:bold;'>🎯 投資判定マトリクス</h3>", unsafe_allow_html=True)
             for _, row in df_final.iterrows():
                 st.markdown(f"""
                 <div class='result-card' style='border-left: 8px solid {row['color']};'>
@@ -169,4 +186,4 @@ if run_btn:
                 """, unsafe_allow_html=True)
                 
         except Exception as e:
-            st.error(f"解析エラー: AIの出力したCSVデータを確認してください。({e})")
+            st.error(f"解析エラー: AIの出力したCSVデータを確認してください。見出し行(馬番,馬名...)が含まれているか確認してください。")
