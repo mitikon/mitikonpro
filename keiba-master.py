@@ -4,7 +4,7 @@ import io
 import streamlit.components.v1 as components
 
 # ==========================================
-# 状態管理（確実なデータオールクリア機構）
+# 状態管理
 # ==========================================
 if 'raw_data' not in st.session_state:
     st.session_state.raw_data = ""
@@ -13,35 +13,50 @@ def clear_data_action():
     st.session_state.raw_data = ""
 
 # ==========================================
+# 【重要追加】どんな記号・文字でも数字に変える無敵フィルター
+# ==========================================
+def safe_float(val, default_val=0.0):
+    try:
+        # %や空白を消す
+        s = str(val).replace('%', '').strip()
+        # ハイフンや空欄ならデフォルト値（0や10など）を返す
+        if s in ['-', 'ー', '', 'None', 'null']:
+            return default_val
+        return float(s)
+    except:
+        return default_val
+
+# ==========================================
 # コアエンジン（全スコア算出ロジック）
 # ==========================================
 def execute_master_fusion(df_raw):
     results = []
     for _, row in df_raw.iterrows():
-        try:
-            tan_ret = float(str(row.get('単回値', 0)).replace('%', '').strip() or 0)
-            fuku_ret = float(str(row.get('複回値', 0)).replace('%', '').strip() or 0)
-            odds = float(str(row.get('オッズ', 10)).strip() or 10)
-            up3 = float(str(row.get('上がり3F順位', 10)).strip() or 10)
+        # 【修正】safe_floatを使って、ハイフンが来ても絶対にエラーにしない
+        tan_ret = safe_float(row.get('単回値', 0), 0)
+        fuku_ret = safe_float(row.get('複回値', 0), 0)
+        odds = safe_float(row.get('オッズ', 10), 10)
+        up3 = safe_float(row.get('上がり3F順位', 10), 10) # データ無し(-)は10位扱い
+        
+        p_val = str(row.get('ポジション評価', 3)).strip()
+        if p_val == '逃げ': pos = 4.0
+        elif p_val == '先行': pos = 5.0
+        elif p_val == '差し': pos = 3.0
+        elif p_val in ['追込', '追い込み']: pos = 1.0
+        elif p_val in ['-', '']: pos = 3.0 # データ無し(-)は平均の3扱い
+        else: pos = safe_float(p_val, 3.0)
             
-            p_val = str(row.get('ポジション評価', 3)).strip()
-            if p_val == '逃げ': pos = 4.0
-            elif p_val == '先行': pos = 5.0
-            elif p_val == '差し': pos = 3.0
-            elif p_val in ['追込', '追い込み']: pos = 1.0
-            else: pos = float(p_val)
-                
-            j_win = float(str(row.get('騎手勝率', 0)).replace('%', '').strip() or 0)
-            bias = float(str(row.get('枠バイアス(秒)', 0)).strip() or 0)
-            k_rank = str(row.get('亀谷ランク', 'C')).upper().strip()
-            
-            baban = int(row.get('馬番', 0))
-            bamei = str(row.get('馬名', '不明')).strip()
-            waku = int(row.get('枠', 0)) if pd.notna(row.get('枠')) else 0
+        j_win = safe_float(row.get('騎手勝率', 0), 0)
+        bias = safe_float(row.get('枠バイアス(秒)', 0), 0)
+        k_rank = str(row.get('亀谷ランク', 'C')).upper().strip()
+        
+        baban = int(safe_float(row.get('馬番', 0), 0))
+        if baban == 0: continue # 馬番が取得できない行だけスキップ
+        
+        bamei = str(row.get('馬名', '不明')).strip()
+        waku = int(safe_float(row.get('枠', 0), 0))
 
-        except Exception:
-            continue
-
+        # DNA: 旧システムのノイズカット
         if tan_ret > 300: tan_ret = 80
         if fuku_ret > 300: fuku_ret = 70
         
@@ -86,7 +101,7 @@ def execute_master_fusion(df_raw):
     return pd.DataFrame(final_output).sort_values(by='総合順位').reset_index(drop=True)
 
 # ==========================================
-# UIレイアウト（データ開示＆操作性特化）
+# UIレイアウト
 # ==========================================
 st.set_page_config(page_title="競馬AI投資システム", layout="centered")
 
@@ -94,11 +109,8 @@ st.markdown("""
 <style>
     .stApp { background-color: #f8f9fa; }
     .main-title { text-align: center; color: #d32f2f; font-weight: 900; font-size: 28px; }
-    
     div.stButton > button[kind="primary"] { background-color: #d32f2f !important; color: white !important; border-radius: 10px !important; height: 70px !important; font-size: 20px !important; font-weight: bold !important; width: 100% !important; border: 3px solid #8b0000 !important; }
     div.stButton > button[kind="secondary"] { background-color: #6c757d !important; color: white !important; border-radius: 10px !important; height: 70px !important; font-size: 20px !important; font-weight: bold !important; width: 100% !important; border: 3px solid #495057 !important; }
-    
-    /* 修正1：テキストエリアの文字色を真っ黒にし、背景を白に固定 */
     textarea { color: #000000 !important; background-color: #ffffff !important; font-weight: bold !important; font-size: 14px !important; }
     div[data-baseweb="textarea"] > div { border: 3px solid #d32f2f !important; border-radius: 8px !important; background-color: #ffffff !important; }
 </style>
@@ -155,12 +167,11 @@ if execute_btn:
             df_final = execute_master_fusion(df_raw)
             
             if df_final.empty:
-                st.error("有効なデータが計算できませんでした。")
+                st.error("有効なデータが計算できませんでした。（馬番が含まれているか確認してください）")
             else:
                 st.markdown("<h2 style='text-align:center; color:#d32f2f;'>🎯 投資判定マトリクス</h2>", unsafe_allow_html=True)
                 
                 for _, row in df_final.iterrows():
-                    # 修正2：インデント（空白）を完全に無くし、Markdownエンジンがコードブロックと誤認するのを防ぐ
                     html_block = f"""<div style='background:#fff; border-left:12px solid {row['color']}; padding:15px; border-radius:8px; margin-bottom:15px; border:2px solid #ddd; box-shadow: 0 4px 6px rgba(0,0,0,0.1);'>
 <div style='display:flex; justify-content:space-between; align-items:center; border-bottom:1px solid #eee; padding-bottom:10px; margin-bottom:10px;'>
 <div>
@@ -183,4 +194,4 @@ if execute_btn:
                     st.markdown(html_block, unsafe_allow_html=True)
                     
         except Exception as e:
-            st.error("【エラー】AIが出力したデータに「馬番,馬名...」の見出しが含まれているか、余計な文章が入っていないか確認してください。")
+            st.error("【エラー】AIが出力したデータに「馬番,馬名...」の見出しが含まれているか確認してください。")
