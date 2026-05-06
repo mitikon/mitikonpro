@@ -1,5 +1,6 @@
 import streamlit as st
 import pandas as pd
+import numpy as np
 import io
 import streamlit.components.v1 as components
 
@@ -12,14 +13,9 @@ if 'raw_data' not in st.session_state:
 def clear_data_action():
     st.session_state.raw_data = ""
 
-# ==========================================
-# 【重要追加】どんな記号・文字でも数字に変える無敵フィルター
-# ==========================================
 def safe_float(val, default_val=0.0):
     try:
-        # %や空白を消す
         s = str(val).replace('%', '').strip()
-        # ハイフンや空欄ならデフォルト値（0や10など）を返す
         if s in ['-', 'ー', '', 'None', 'null']:
             return default_val
         return float(s)
@@ -27,83 +23,54 @@ def safe_float(val, default_val=0.0):
         return default_val
 
 # ==========================================
-# コアエンジン（全スコア算出ロジック）
+# コアエンジン Ver 4.0 (期待値・EV算出ロジック)
 # ==========================================
-def execute_master_fusion(df_raw):
-    results = []
-    for _, row in df_raw.iterrows():
-        # 【修正】safe_floatを使って、ハイフンが来ても絶対にエラーにしない
-        tan_ret = safe_float(row.get('単回値', 0), 0)
-        fuku_ret = safe_float(row.get('複回値', 0), 0)
-        odds = safe_float(row.get('オッズ', 10), 10)
-        up3 = safe_float(row.get('上がり3F順位', 10), 10) # データ無し(-)は10位扱い
-        
-        p_val = str(row.get('ポジション評価', 3)).strip()
-        if p_val == '逃げ': pos = 4.0
-        elif p_val == '先行': pos = 5.0
-        elif p_val == '差し': pos = 3.0
-        elif p_val in ['追込', '追い込み']: pos = 1.0
-        elif p_val in ['-', '']: pos = 3.0 # データ無し(-)は平均の3扱い
-        else: pos = safe_float(p_val, 3.0)
-            
-        j_win = safe_float(row.get('騎手勝率', 0), 0)
-        bias = safe_float(row.get('枠バイアス(秒)', 0), 0)
-        k_rank = str(row.get('亀谷ランク', 'C')).upper().strip()
-        
-        baban = int(safe_float(row.get('馬番', 0), 0))
-        if baban == 0: continue # 馬番が取得できない行だけスキップ
-        
-        bamei = str(row.get('馬名', '不明')).strip()
-        waku = int(safe_float(row.get('枠', 0), 0))
-
-        # DNA: 旧システムのノイズカット
-        if tan_ret > 300: tan_ret = 80
-        if fuku_ret > 300: fuku_ret = 70
-        
-        val_score = (tan_ret * 0.5) + (fuku_ret * 0.5)
-        spurt_bonus = 25 if (up3 <= 3.0 and pos >= 3.0) else 0
-        rank_bonus = 15 if k_rank == 'A' else 10 if k_rank == 'B' else 5 if k_rank == 'C' else 0
-        
-        old_score = (100 - odds * 0.5) + (val_score * 0.3) + rank_bonus + (j_win * 0.3) + spurt_bonus
-        v35_score = old_score - (bias * 10)
-        
-        results.append({
-            '馬番': baban, '枠': waku, '馬名': bamei,
-            '旧評価点': round(old_score, 1),
-            'V35点': round(v35_score, 1)
-        })
-
-    df_calc = pd.DataFrame(results)
-    if df_calc.empty:
-        return df_calc
+def execute_ev_engine(df_raw):
+    df = df_raw.copy()
     
-    df_calc['総合順位'] = df_calc['V35点'].rank(ascending=False, method='min').astype(int)
-    max_score = df_calc['V35点'].max()
-    df_calc['V40馬身'] = round(((max_score - df_calc['V35点']) * 0.1 * 16.6) / 2.4, 1)
+    for col in ['オッズ', '単回値', '上がり3F順位', 'ポジション評価']:
+        if col in df.columns:
+            df[col] = df[col].apply(lambda x: safe_float(x))
+            
+    if df['単回値'].std() != 0:
+        df['単回値_Z'] = (df['単回値'] - df['単回値'].mean()) / df['単回値'].std()
+    else:
+        df['単回値_Z'] = 0
+        
+    if df['上がり3F順位'].std() != 0:
+        df['上がり_Z'] = (df['上がり3F順位'].mean() - df['上がり3F順位']) / df['上がり3F順位'].std()
+    else:
+        df['上がり_Z'] = 0
 
-    final_output = []
-    for _, r in df_calc.iterrows():
-        rank = r['総合順位']
-        hc = r['V40馬身']
-        
-        if rank <= 2 and hc <= 1.0: g, l, c, act = "S", "完全無欠の絶対軸", "#d32f2f", "【単・複】厚め勝負"
-        elif rank <= 4 and hc == 0.0: g, l, c, act = "A", "特大のオッズバグ", "#ff9800", "【単勝】妙味狙い"
-        elif rank == 1 and hc >= 5.0: g, l, c, act = "B", "危険な人気馬", "#9c27b0", "【見送り】ヒモまで"
-        elif rank > 6 and hc > 3.0: g, l, c, act = "C", "完全ノイズ", "#757575", "【消し】購入対象外"
-        else: g, l, c, act = "R", "連下・ヒモ候補", "#0056b3", "【通常】相手候補"
-        
-        final_output.append({
-            '総合順位': rank, '馬番': r['馬番'], '枠': r['枠'], '馬名': r['馬名'], 
-            '判定': g, 'ステータス': l, '推奨馬券': act, 'color': c, 
-            '旧評価点': r['旧評価点'], 'V35点': r['V35点'], 'V40馬身': hc
-        })
-        
-    return pd.DataFrame(final_output).sort_values(by='総合順位').reset_index(drop=True)
+    df['実力スコア'] = (df['単回値_Z'] * 1.5) + (df['上がり_Z'] * 1.0)
+    df['実力スコア_exp'] = np.exp(df['実力スコア'])
+    df['予測勝率(%)'] = (df['実力スコア_exp'] / df['実力スコア_exp'].sum()) * 100
+    df['期待値(EV)'] = (df['予測勝率(%)'] / 100) * df['オッズ']
+    
+    df['総合順位'] = df['期待値(EV)'].rank(ascending=False, method='min').astype(int)
+    
+    conditions = [
+        (df['期待値(EV)'] >= 1.5),
+        (df['期待値(EV)'] >= 1.1),
+        (df['期待値(EV)'] >= 0.8),
+        (df['期待値(EV)'] < 0.8)
+    ]
+    choices_g = ["S", "A", "R", "C"]
+    choices_l = ["完全無欠の絶対軸", "特大のオッズバグ", "連下・ヒモ候補", "完全ノイズ"]
+    choices_c = ["#d32f2f", "#ff9800", "#0056b3", "#757575"]
+    choices_act = ["【単・複】厚め勝負", "【単勝】妙味狙い", "【通常】相手候補", "【消し】購入対象外"]
+    
+    df['判定'] = np.select(conditions, choices_g, default="C")
+    df['ステータス'] = np.select(conditions, choices_l, default="完全ノイズ")
+    df['color'] = np.select(conditions, choices_c, default="#757575")
+    df['推奨馬券'] = np.select(conditions, choices_act, default="【消し】購入対象外")
+    
+    return df.sort_values('総合順位').reset_index(drop=True)
 
 # ==========================================
-# UIレイアウト
+# UIレイアウト (改修前のデザインを完全踏襲)
 # ==========================================
-st.set_page_config(page_title="競馬AI投資システム", layout="centered")
+st.set_page_config(page_title="競馬AI投資システム Ver 4.0", layout="centered")
 
 st.markdown("""
 <style>
@@ -116,7 +83,7 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-st.markdown("<div class='main-title'>競馬AI投資システム</div>", unsafe_allow_html=True)
+st.markdown("<div class='main-title'>競馬AI投資システム Ver 4.0</div>", unsafe_allow_html=True)
 
 st.info("🔴 以下のボタンで指示文をコピーし、AIに送信してください。")
 copy_html = """
@@ -140,13 +107,13 @@ pasted_data = st.text_area(
     key="raw_data", 
     height=200, 
     label_visibility="collapsed",
-    placeholder="馬番,馬名,枠,オッズ,上がり3F順位,ポジション評価,亀谷ランク,騎手勝率,単回値,複回値,枠バイアス(秒)\n（ここにペースト）"
+    placeholder="馬番,馬名,枠,オッズ,上がり3F順位,ポジション評価,亀谷ランク,騎手勝率,単回値,複回値,枠バイアス(秒)\\n（ここにペースト）"
 )
 
 st.markdown("<hr style='border:1px solid #ccc; margin: 15px 0;'>", unsafe_allow_html=True)
 col1, col2 = st.columns(2)
 with col1:
-    execute_btn = st.button("🚀 脈動・物理解析を実行", type="primary", use_container_width=True)
+    execute_btn = st.button("🚀 期待値(EV)解析を実行", type="primary", use_container_width=True)
 with col2:
     clear_btn = st.button("🗑️ データオールクリア", type="secondary", on_click=clear_data_action, use_container_width=True)
 st.markdown("<hr style='border:1px solid #ccc; margin: 15px 0;'>", unsafe_allow_html=True)
@@ -164,20 +131,20 @@ if execute_btn:
                 if old_col in df_raw.columns and new_col not in df_raw.columns:
                     df_raw.rename(columns={old_col: new_col}, inplace=True)
 
-            df_final = execute_master_fusion(df_raw)
+            df_final = execute_ev_engine(df_raw)
             
-            if df_final.empty:
-                st.error("有効なデータが計算できませんでした。（馬番が含まれているか確認してください）")
-            else:
-                st.markdown("<h2 style='text-align:center; color:#d32f2f;'>🎯 投資判定マトリクス</h2>", unsafe_allow_html=True)
+            st.markdown("<h2 style='text-align:center; color:#d32f2f;'>🎯 投資判定マトリクス</h2>", unsafe_allow_html=True)
+            
+            for _, row in df_final.iterrows():
+                ev_color = "#d32f2f" if row['期待値(EV)'] >= 1.0 else "#0056b3"
+                waku_str = row.get('枠', '-')
                 
-                for _, row in df_final.iterrows():
-                    html_block = f"""<div style='background:#fff; border-left:12px solid {row['color']}; padding:15px; border-radius:8px; margin-bottom:15px; border:2px solid #ddd; box-shadow: 0 4px 6px rgba(0,0,0,0.1);'>
+                html_block = f"""<div style='background:#fff; border-left:12px solid {row['color']}; padding:15px; border-radius:8px; margin-bottom:15px; border:2px solid #ddd; box-shadow: 0 4px 6px rgba(0,0,0,0.1);'>
 <div style='display:flex; justify-content:space-between; align-items:center; border-bottom:1px solid #eee; padding-bottom:10px; margin-bottom:10px;'>
 <div>
 <span style='font-size:30px; font-weight:900; color:{row['color']};'>{row['判定']}</span>
-<span style='margin-left:15px; font-size:20px; font-weight:bold; color:#111;'>#{row['馬番']} {row['馬名']}</span>
-<span style='margin-left:10px; font-size:14px; color:#666;'>({row['枠']}枠)</span>
+<span style='margin-left:15px; font-size:20px; font-weight:bold; color:#111;'>#{row.get('馬番', '-')} {row.get('馬名', '不明')}</span>
+<span style='margin-left:10px; font-size:14px; color:#666;'>({waku_str}枠)</span>
 </div>
 <div style='text-align:right;'>
 <span style='color:{row['color']}; font-weight:bold; font-size:18px;'>{row['ステータス']}</span><br>
@@ -186,12 +153,12 @@ if execute_btn:
 </div>
 <div style='display:flex; justify-content:space-between; font-size:15px; font-weight:bold; color:#333; background:#f8f9fa; padding:10px; border-radius:5px;'>
 <div style='flex:1; text-align:center; border-right:1px solid #ccc;'>🏆 総合順位<br><span style='font-size:22px; color:#d32f2f;'>{row['総合順位']}位</span></div>
-<div style='flex:1; text-align:center; border-right:1px solid #ccc;'>旧システム評価<br><span style='font-size:18px; color:#0056b3;'>{row['旧評価点']} 点</span></div>
-<div style='flex:1; text-align:center; border-right:1px solid #ccc;'>システム 3.5<br><span style='font-size:18px; color:#0056b3;'>{row['V35点']} 点</span></div>
-<div style='flex:1; text-align:center;'>システム 4.0<br><span style='font-size:18px; color:#d32f2f;'>+{row['V40馬身']} 身</span></div>
+<div style='flex:1; text-align:center; border-right:1px solid #ccc;'>現在オッズ<br><span style='font-size:18px; color:#111;'>{row.get('オッズ', 0):.1f} 倍</span></div>
+<div style='flex:1; text-align:center; border-right:1px solid #ccc;'>システム勝率<br><span style='font-size:18px; color:#0056b3;'>{row['予測勝率(%)']:.1f} %</span></div>
+<div style='flex:1; text-align:center;'>期待値 (EV)<br><span style='font-size:18px; color:{ev_color};'>{row['期待値(EV)']:.2f}</span></div>
 </div>
 </div>"""
-                    st.markdown(html_block, unsafe_allow_html=True)
+                st.markdown(html_block, unsafe_allow_html=True)
                     
         except Exception as e:
             st.error("【エラー】AIが出力したデータに「馬番,馬名...」の見出しが含まれているか確認してください。")
