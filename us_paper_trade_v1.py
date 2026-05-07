@@ -4,6 +4,8 @@ import datetime
 import os
 import yfinance as yf
 import warnings
+import pytz
+import pandas_market_calendars as mcal  # 👈 追加: 自動更新される市場カレンダー
 
 # yfinanceの一部警告を非表示にする
 warnings.filterwarnings('ignore')
@@ -30,6 +32,30 @@ REVERSE_SECTOR_MAP = {
     "1621.T": "XLV",  # 日本 医薬品 -> 米国 ヘルスケア
     "1624.T": "XLI"   # 日本 機械 -> 米国 資本財
 }
+
+def is_nyse_open_today():
+    """
+    【カレンダー機能】現在の米国東部時間（EST/EDT）を基準に、
+    今日がNYSE（ニューヨーク証券取引所）の営業日かどうかを判定する。
+    ※ pandas_market_calendars により毎年自動更新される。
+    """
+    # 日本時間ではなく、米国の現在の日付を取得
+    tz_us = pytz.timezone('US/Eastern')
+    us_today = datetime.datetime.now(tz_us).date()
+    
+    # NYSEのカレンダーを取得
+    nyse = mcal.get_calendar('NYSE')
+    
+    # 対象日のスケジュールを抽出
+    schedule = nyse.schedule(start_date=us_today, end_date=us_today)
+    
+    # スケジュールが空（empty）であれば休場日
+    if schedule.empty:
+        print(f"🗓️ カレンダー判定: 米国時間 {us_today} は休場日（土日・祝日）です。")
+        return False
+    else:
+        print(f"🗓️ カレンダー判定: 米国時間 {us_today} は営業日です。トレードを進行します。")
+        return True
 
 def fetch_jp_signals():
     """
@@ -96,7 +122,7 @@ def execute_paper_trade_us(long_ticker, short_ticker, long_budget, short_budget)
         return total_profit
         
     except Exception as e:
-        print(f"【警告】米国データの取得に失敗しました。祝日の可能性があります。詳細: {e}")
+        print(f"【警告】米国データの取得に失敗しました。詳細: {e}")
         return 0
 
 def main():
@@ -110,6 +136,14 @@ def main():
     if os.path.exists(KILL_SWITCH_FILE):
         print("【警告】STOP.txtが検出されました。本日の米国版トレードを強制停止します。")
         return
+
+    # ------------------------------------------
+    # 🗓️ 安全装置2：米国市場カレンダー判定 (完全自動化用)
+    # ------------------------------------------
+    if not is_nyse_open_today():
+        print("【休場日】本日の米国市場は開いていないため、トレード処理をスキップして終了します。")
+        return
+    print("-" * 50)
 
     # ------------------------------------------
     # 💰 資産読み込みと資金管理
@@ -130,7 +164,7 @@ def main():
     try:
         long_ticker, short_ticker = fetch_jp_signals()
     except Exception as e:
-        print(e)
+        print(f"シグナル抽出エラー: {e}")
         return
 
     # ------------------------------------------
