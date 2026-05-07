@@ -4,6 +4,7 @@ import datetime
 import os
 import yfinance as yf
 import warnings
+import jpholiday  # 日本の祝日判定用ライブラリ
 
 # yfinanceの一部警告を非表示にする
 warnings.filterwarnings('ignore')
@@ -12,6 +13,7 @@ warnings.filterwarnings('ignore')
 # [GitHub管理用] プロジェクト名: Dual-Alpha-Project
 # ファイル名: jp_paper_trade_v1.py (テスト稼働版)
 # 目的: 日米波及理論のフォワードテスト（ペーパートレード）
+# 追加機能: JPX営業日カレンダー自動判定
 # ==========================================
 
 # 1. 初期設定とパラメータ
@@ -28,6 +30,29 @@ SECTOR_MAP = {
     "XLV": "1621.T",  # 米国ヘルスケア -> 日本 医薬品
     "XLI": "1624.T"   # 米国資本財 -> 日本 機械
 }
+
+def is_jpx_open(target_date=None):
+    """
+    東京証券取引所（JPX）が開場しているか判定する。
+    毎年自動更新される jpholiday を利用。
+    """
+    if target_date is None:
+        target_date = datetime.date.today()
+        
+    # 1. 土日は休場 (5:土曜, 6:日曜)
+    if target_date.weekday() >= 5:
+        return False
+        
+    # 2. 年末年始（12月31日〜1月3日）は休場
+    if (target_date.month == 12 and target_date.day == 31) or \
+       (target_date.month == 1 and target_date.day in [1, 2, 3]):
+        return False
+        
+    # 3. 日本の祝日・振替休日は休場
+    if jpholiday.is_holiday(target_date):
+        return False
+        
+    return True
 
 def fetch_us_signals():
     """
@@ -95,13 +120,23 @@ def execute_paper_trade(long_ticker, short_ticker, long_budget, short_budget):
         return total_profit
         
     except Exception as e:
-        print(f"【警告】本日の日本株データの取得に失敗しました。祝日の可能性があります。詳細: {e}")
+        print(f"【警告】本日の日本株データの取得に失敗しました。詳細: {e}")
         return 0
 
 def main():
-    today_str = datetime.datetime.now().strftime("%Y-%m-%d")
+    today = datetime.date.today()
+    today_str = today.strftime("%Y-%m-%d")
+    
     print(f"[{datetime.datetime.now()}] ペーパートレード検証システム起動")
     print("-" * 50)
+
+    # 0. 日本市場カレンダー判定（完全自動運用向け）
+    if not is_jpx_open(today):
+        print(f"📅 本日 ({today_str}) は東京証券取引所の休場日（土日・祝日・年末年始）です。")
+        print("取引をスキップし、システムを終了します。")
+        return
+
+    print(f"📅 本日 ({today_str}) は営業日です。取引プロセスを開始します。")
 
     # 1. 資産の読み込み
     if os.path.exists(ASSET_FILE):
