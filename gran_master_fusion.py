@@ -67,14 +67,12 @@ def safe_float(val, default_val=0.0):
 def execute_master_fusion(df_raw):
     results = []
     for _, row in df_raw.iterrows():
-        # 回収率の「断崖絶壁」を排除し、クリッピング（上限設定）に変更
         tan_ret = min(safe_float(row.get('単回値', 0), 0), 250)
         fuku_ret = min(safe_float(row.get('複回値', 0), 0), 180)
         
         odds = safe_float(row.get('オッズ', 10), 10)
         up3 = safe_float(row.get('上がり3F順位', 10), 10)
         
-        # ポジション評価の数値化
         p_val = str(row.get('ポジション評価', 3)).strip()
         if '逃' in p_val: pos = 4.5
         elif '先' in p_val: pos = 5.0
@@ -87,25 +85,22 @@ def execute_master_fusion(df_raw):
         k_rank = str(row.get('亀谷ランク', 'C')).upper().strip()
         tokuchu = str(row.get('特注評価', 'C')).upper().strip()
         
+        # 馬番が取得できない場合はスキップ
         baban_val = safe_float(row.get('馬番', 0), 0)
         if baban_val == 0: continue
         baban = int(baban_val)
+        
         bamei = str(row.get('馬名', '不明')).strip()
         waku = int(safe_float(row.get('枠', 0), 0))
 
-        # オッズによるペナルティを「線形」から「非線形」へ変更
         odds_penalty = min(math.log10(odds + 1) * 15, 25) 
         
-        # ボーナス算出
         val_score = (tan_ret * 0.4) + (fuku_ret * 0.6)
         spurt_bonus = 20 if (up3 <= 3.0 and pos >= 3.0) else 0
         rank_bonus = 15 if k_rank == 'A' else 10 if k_rank == 'B' else 5 if k_rank == 'C' else 0
         tokuchu_bonus = 18 if tokuchu == 'A' else 7 if tokuchu == 'B' else 0
         
-        # 【算出1】旧評価点（基礎力）
         old_score = (100 - odds_penalty) + (val_score * 0.25) + rank_bonus + (j_win * 0.4) + spurt_bonus + tokuchu_bonus
-        
-        # 【算出2】V35評価（枠バイアス補正）
         v35_score = old_score - (bias * 12)
         
         results.append({
@@ -116,19 +111,16 @@ def execute_master_fusion(df_raw):
     df_calc = pd.DataFrame(results)
     if df_calc.empty: return df_calc
     
-    # 【算出3】物理ハンデ（V40馬身）
     df_calc['総合順位'] = df_calc['V35点'].rank(ascending=False, method='min').astype(int)
     max_score = df_calc['V35点'].max()
     df_calc['V40馬身'] = round(((max_score - df_calc['V35点']) * 0.1 * 16.6) / 2.4, 1)
 
-    # 判定ロジックの論理矛盾を解消
     final_output = []
     for _, r in df_calc.iterrows():
         rank = r['総合順位']
         hc = r['V40馬身']
         odds_val = r['オッズ']
         
-        # 判定アルゴリズム：的中率×回収率のハイブリッド
         if rank == 1 and hc == 0.0:
             if odds_val <= 3.5: g, l, c, act = "S", "完全無欠の絶対軸", "#d32f2f", "【単・複】厚め勝負"
             else: g, l, c, act = "S", "期待値最高の1位", "#d32f2f", "【単勝】一本釣り"
@@ -153,9 +145,7 @@ def execute_master_fusion(df_raw):
 # 5. UIレイアウト
 # ==========================================
 
-# --- 指示文コピー ---
 st.info("🔴 以下の指示文をコピーし、Geminiに最新統計を検索させてください。")
-# コードブロック（CSV）での出力を強制し、Geminiのデフォルト「コピー」ボタンを出現させる
 copy_prompt = "以下の画像を解析し、JRA過去15年の『コース・血統・脚質統計』を検索して統合CSVを作成せよ。統計的に今回有利な条件（期待値が高い条件）に合致する馬を特定し、その理由と共に12列目の『特注評価(A,B,C)』を決定すること。\n【必須項目】馬番,馬名,枠,オッズ,上がり3F順位,ポジション評価,亀谷ランク,騎手勝率,単回値,複回値,枠バイアス(秒),特注評価\n\n【絶対遵守ルール】\n1. ポジション評価は必ず1〜5の数値にすること。\n2. ユーザーがワンクリックでコピーできるよう、出力データは必ず「```csv」と「```」で囲んだコードブロック形式で出力すること。余計な解説はCSVの外に書くこと。"
 
 copy_html = f"""
@@ -172,7 +162,6 @@ function copyText() {{
 """
 components.html(copy_html, height=85)
 
-# --- 入力エリア ---
 pasted_data = st.text_area("AI抽出データをペースト", key="raw_data", height=200, placeholder="馬番,馬名,枠,オッズ...")
 
 col1, col2 = st.columns(2)
@@ -181,22 +170,29 @@ with col1:
 with col2:
     st.button("🗑️ データクリア", type="secondary", on_click=clear_data_action, use_container_width=True)
 
-# --- 解析結果 ---
 if execute_btn:
     if not pasted_data.strip():
         st.error("データが空です。")
     else:
         try:
-            # コードブロック記号（```csvや```）が混入していても無視して読み込めるようにクリーニング
             clean_data = pasted_data.replace("```csv", "").replace("```", "").strip()
             df_raw = pd.read_csv(io.StringIO(clean_data), skipinitialspace=True)
+            
+            # 【重要追加】見出しの空白や揺れを強制クリーニング
+            df_raw.columns = [str(c).strip().replace('　', '') for c in df_raw.columns]
+            rename_dict = {'枠バイアス': '枠バイアス(秒)', '上がり順位': '上がり3F順位', 'ポジション': 'ポジション評価'}
+            for old_col, new_col in rename_dict.items():
+                if old_col in df_raw.columns and new_col not in df_raw.columns:
+                    df_raw.rename(columns={old_col: new_col}, inplace=True)
+
             df_final = execute_master_fusion(df_raw)
             
             if df_final.empty:
-                st.warning("有効なデータが見つかりませんでした。")
+                st.warning("有効なデータが見つかりませんでした。馬番や見出し行が含まれているか確認してください。")
             else:
                 st.markdown("<h3 style='text-align:center;'>🎯 解析マトリクス結果</h3>", unsafe_allow_html=True)
                 for _, row in df_final.iterrows():
+                    # 【重要追加】表示項目に「旧システム」を追加し、レイアウトを調整
                     html_card = f"""<div style='background:#fff; border-left:15px solid {row['color']}; padding:15px; border-radius:12px; margin-bottom:15px; box-shadow: 0 4px 10px rgba(0,0,0,0.08); border:1px solid #eee;'>
 <div style='display:flex; justify-content:space-between; align-items:center; margin-bottom:10px;'>
     <div>
@@ -211,8 +207,9 @@ if execute_btn:
 </div>
 <div style='display:flex; justify-content:space-around; background:#f9f9f9; padding:10px; border-radius:8px;'>
     <div style='text-align:center;'>順位<br><b style='font-size:20px; color:#d32f2f;'>{row['総合順位']}</b></div>
-    <div style='text-align:center;'>V35点<br><b style='font-size:18px;'>{row['V35点']}</b></div>
-    <div style='text-align:center;'>V40馬身<br><b style='font-size:18px;'>+{row['V40馬身']}</b></div>
+    <div style='text-align:center;'>旧評価<br><b style='font-size:18px; color:#0056b3;'>{row['旧評価点']}</b></div>
+    <div style='text-align:center;'>V35点<br><b style='font-size:18px; color:#0056b3;'>{row['V35点']}</b></div>
+    <div style='text-align:center;'>V40馬身<br><b style='font-size:18px; color:#d32f2f;'>+{row['V40馬身']}</b></div>
 </div>
 </div>"""
                     st.markdown(html_card, unsafe_allow_html=True)
