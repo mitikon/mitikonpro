@@ -66,12 +66,12 @@ def execute_master_fusion(df_raw):
     results = []
     for _, row in df_raw.iterrows():
         # データ取得とクレンジング
-        tan_ret = min(safe_float(row.get('単回値', 0), 0), 300) # 上限を少し解放
+        tan_ret = min(safe_float(row.get('単回値', 0), 0), 300)
         fuku_ret = min(safe_float(row.get('複回値', 0), 0), 200)
         odds = safe_float(row.get('オッズ', 10), 10)
         up3 = safe_float(row.get('上がり3F順位', 10), 10)
         
-        # ポジション評価の現代競馬への最適化（前有利を基本としつつ極端な追込は減点）
+        # ポジション評価の現代競馬への最適化
         p_val = str(row.get('ポジション評価', 3)).strip()
         if '逃' in p_val: pos = 5.0
         elif '先' in p_val: pos = 4.0
@@ -93,38 +93,32 @@ def execute_master_fusion(df_raw):
 
         # --- v5.0 スコアリングエンジン ---
         
-        # 1. 回収率ベースの期待値スコア (穴馬発掘用)
-        # 単勝の比重を上げ、一発の威力を高く評価
+        # 1. 回収率ベースの期待値スコア
         val_score = (tan_ret * 0.65) + (fuku_ret * 0.35) 
         
-        # 2. 展開・脚質シナジー (的中率ベース)
-        # 「前に行ける馬」または「速い上がりを使える差し馬」を高評価
+        # 2. 展開・脚質シナジー
         spurt_bonus = 0
         if up3 <= 3.0 and pos <= 3.0: 
-            spurt_bonus = 25 # 確実な決め手を持つ馬
+            spurt_bonus = 25
         elif pos >= 4.0:
-            spurt_bonus = 18 # 展開有利な先行馬
+            spurt_bonus = 18
 
         # 3. 信頼度ボーナス
         rank_bonus = 18 if k_rank == 'A' else 9 if k_rank == 'B' else 0
         tokuchu_bonus = 22 if tokuchu == 'A' else 10 if tokuchu == 'B' else 0
         
-        # 4. オッズ・ハイブリッド補正（ここがキモ）
+        # 4. オッズ・ハイブリッド補正
         odds_factor = 0
         if odds >= 12.0 and val_score >= 110:
-            # 期待値が高くオッズが甘い馬に強烈なバフ（高回収率へのブースト）
             odds_factor = 25 
         elif odds <= 3.5 and (j_win >= 15.0 or tokuchu == 'A'):
-            # 実力のある圧倒的人気馬はペナルティを免除し加点（高的中率の担保）
             odds_factor = 15
         elif odds > 60.0:
-            # 極端な大穴はノイズになるため微減点
             odds_factor = -10 
         else:
-            # 中穴〜上位人気への緩やかなオッズ補正
             odds_factor = -min(math.log10(odds + 1) * 8, 15)
 
-        # 総合得点算出（バイアスは影響度を調整）
+        # 総合得点算出
         v50_score = (val_score * 0.3) + (j_win * 1.5) + spurt_bonus + rank_bonus + tokuchu_bonus + odds_factor - (bias * 15)
         
         # ベースライン調整
@@ -141,7 +135,7 @@ def execute_master_fusion(df_raw):
     # 順位と馬身差（スコア差）の計算
     df_calc['総合順位'] = df_calc['V50点'].rank(ascending=False, method='min').astype(int)
     max_score = df_calc['V50点'].max()
-    df_calc['V50馬身'] = round(((max_score - df_calc['V50点']) * 0.1 * 16.6) / 2.8, 1) # 馬身差のスケールを現代風に微調整
+    df_calc['V50馬身'] = round(((max_score - df_calc['V50点']) * 0.1 * 16.6) / 2.8, 1)
 
     final_output = []
     for _, r in df_calc.iterrows():
@@ -149,7 +143,7 @@ def execute_master_fusion(df_raw):
         hc = r['V50馬身']
         odds_val = r['オッズ']
         
-        # --- 判定ロジックの極限チューニング ---
+        # --- 判定ロジック ---
         if rank == 1 and hc == 0.0:
             if odds_val <= 4.0: g, l, c, act = "S", "鉄板級の絶対軸", "#b71c1c", "【馬連・3連複】軸指定"
             elif odds_val >= 7.0: g, l, c, act = "SS", "激アツ単勝特注", "#ff1744", "【単複】全力買い"
@@ -180,8 +174,7 @@ def execute_master_fusion(df_raw):
 # ==========================================
 
 st.info("🔴 以下の指示文をコピーし、Geminiに最新統計を検索させてください。")
-copy_prompt = "以下の画像を解析し、JRA過去15年の『コース・血統・脚質統計』を検索して統合CSVを作成せよ。統計的に今回有利な条件（期待値が高い条件）に合致する馬を特定し、その理由と共に12列目の『特注評価(A,B,C)』を決定すること。\n【必須項目】馬番,馬名,枠,オッズ,上がり3F順位,ポジション評価,亀谷ランク,騎手勝率,単回値,複回値,枠バイアス(秒),特注評価\n\n【絶対遵守ルール】\n1. ポジション評価は必ず1〜5の数値にすること。\n2. ユーザーがワンクリックでコピーできるよう、出力データは必ず「```csv」と「
-```」で囲んだコードブロック形式で出力すること。余計なテキストは除外すること。"
+copy_prompt = "以下の画像を解析し、JRA過去15年の『コース・血統・脚質統計』を検索して統合CSVを作成せよ。統計的に今回有利な条件（期待値が高い条件）に合致する馬を特定し、その理由と共に12列目の『特注評価(A,B,C)』を決定すること。\n【必須項目】馬番,馬名,枠,オッズ,上がり3F順位,ポジション評価,亀谷ランク,騎手勝率,単回値,複回値,枠バイアス(秒),特注評価\n\n【絶対遵守ルール】\n1. ポジション評価は必ず1〜5の数値にすること。\n2. ユーザーがワンクリックでコピーできるよう、出力データは必ず「```csv」と「```」で囲んだコードブロック形式で出力すること。余計なテキストは除外すること。"
 
 copy_html = f"""
 <button onclick="copyText()" style="background-color:#d32f2f; color:white; border:none; border-radius:15px; padding:15px; font-size:18px; font-weight:bold; width:100%; cursor:pointer; box-shadow: 0 4px #8b0000;">
@@ -226,7 +219,6 @@ if execute_btn:
             else:
                 st.markdown("<h3 style='text-align:center;'>🎯 V5.0 解析マトリクス結果</h3>", unsafe_allow_html=True)
                 for _, row in df_final.iterrows():
-                    # UIをV5仕様にアップデート（期待値スコアの表示追加）
                     html_card = f"""<div style='background:#fff; border-left:15px solid {row['color']}; padding:15px; border-radius:12px; margin-bottom:15px; box-shadow: 0 4px 10px rgba(0,0,0,0.08); border:1px solid #eee;'>
 <div style='display:flex; justify-content:space-between; align-items:center; margin-bottom:10px;'>
     <div>
