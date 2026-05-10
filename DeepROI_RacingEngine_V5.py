@@ -104,11 +104,7 @@ class DeepROIEngineV6_Abyss:
             else: adjusted_roi_mult = 1.0 - math.log1p(1.0 - raw_roi) * 0.5
             
             ev = win_prob * h['odds'] * adjusted_roi_mult
-            
-            # 複勝率の算出 (Harville Approximation k=2.8)
             place_prob = 1 - (1 - win_prob)**2.8
-            
-            # オッズバグの検知 (勝率・複勝率とオッズの異常乖離)
             is_odds_bug = "🚩発生!!" if (win_prob * h['odds'] > 1.8) or (place_prob * (h['odds']*0.3) > 1.5) else "-"
             
             results.append({
@@ -124,58 +120,72 @@ class DeepROIEngineV6_Abyss:
                 'place_prob_raw': place_prob
             })
             
-        # 複勝有力候補を抽出
         place_candidates = sorted(results, key=lambda x: x['place_prob_raw'], reverse=True)[:3]
         place_candidate_names = [c['馬名'] for c in place_candidates]
 
-        # ソート用の一時キーを削除
         for r in results:
             del r['place_prob_raw']
 
         results.sort(key=lambda x: x['期待値(EV)'], reverse=True)
         return {'predicted_pace': dynamic_pace, 'rankings': results, 'place_candidates': place_candidate_names}
 
-
 # ==========================================
 # 2. UIデザイン (Streamlit)
 # ==========================================
 def main():
-    # --- スタイル設定 ---
     st.set_page_config(page_title="Abyss V6.0", layout="wide")
+    
+    # --- CSSによるレイアウト完全再現 ---
     st.markdown("""
         <style>
-        /* 画面全体の背景を白に */
         .stApp { background-color: #FFFFFF; color: #333333; }
         
-        /* テキストエリアの背景を黒、文字をグリーンに */
+        /* 謎の余白を詰める */
+        .block-container { padding-top: 2rem; }
+        
+        /* タイトルの色 */
+        h1, h2 { color: #cc0000 !important; font-weight: bold; }
+        
+        /* 入力用テキストエリア（ここだけ黒） */
         .stTextArea textarea {
             background-color: #1A1A1A !important;
-            color: #00FF41 !important;
-            font-family: 'Courier New', monospace;
+            color: #FFFFFF !important;
+            border: 2px solid #cc0000;
+            border-radius: 8px;
             font-size: 14px;
         }
         
-        /* 見出しやテキストの色を黒に統一 */
-        h1, h2, h3, h4, h5, p, span, div, label {
-            color: #333333 !important;
+        /* ボタンのデザイン（プライマリボタンを赤に固定） */
+        button[kind="primary"] {
+            background-color: #cc0000 !important;
+            color: white !important;
+            border: none !important;
+            font-size: 18px !important;
+            font-weight: bold !important;
+            padding: 10px !important;
         }
         
-        /* アラート枠のデザイン調整 */
-        .stAlert {
-            background-color: #f8f9fa !important;
-            border: 1px solid #dee2e6;
+        /* セカンダリボタン（クリアボタンなど） */
+        button[kind="secondary"] {
+            background-color: #4a4d55 !important;
+            color: white !important;
+            border: none !important;
         }
+        
+        /* 表（データフレーム）のテキスト色 */
+        .stDataFrame { color: #333333; }
         </style>
     """, unsafe_allow_html=True)
 
-    # --- サイドバー設定 ---
-    st.sidebar.header("🚩 今回のレース条件設定")
-    target_dist = st.sidebar.number_input("ターゲット距離 (m)", value=1600, step=100)
-    surface_type = st.sidebar.selectbox("馬場種別", ["TURF", "DIRT"])
-    target_moisture_pct = st.sidebar.slider("路盤含水率 (%)", 0.0, 25.0, 12.0, step=0.5)
-    course_type = st.sidebar.selectbox("コース形態", ["LONG_STRAIGHT", "SHORT_STRAIGHT"])
-    base_time_1600 = st.sidebar.number_input("1600m換算 基準タイム(秒)", value=94.0)
-    target_3f_base = st.sidebar.number_input("基準上がり3F(秒)", value=33.8)
+    # --- サイドバー設定（非表示でも可） ---
+    with st.sidebar:
+        st.header("🚩 今回のレース条件設定")
+        target_dist = st.number_input("ターゲット距離 (m)", value=1600, step=100)
+        surface_type = st.selectbox("馬場種別", ["TURF", "DIRT"])
+        target_moisture_pct = st.slider("路盤含水率 (%)", 0.0, 25.0, 12.0, step=0.5)
+        course_type = st.selectbox("コース形態", ["LONG_STRAIGHT", "SHORT_STRAIGHT"])
+        base_time_1600 = st.number_input("1600m換算 基準タイム", value=94.0)
+        target_3f_base = st.number_input("基準上がり3F", value=33.8)
 
     race_cond = {
         'target_dist': target_dist, 'surface_type': surface_type, 
@@ -183,26 +193,27 @@ def main():
         'base_time_1600': base_time_1600, 'target_3f_base': target_3f_base
     }
 
-    # --- メイン画面 ---
-    st.markdown("<h2 style='text-align: center; color: #E63946 !important;'>競馬AI投資システム 深淵-Abyss- V6.0</h2>", unsafe_allow_html=True)
+    # --- メイン画面ヘッダー ---
+    st.markdown("<h2 style='text-align: center;'>競馬AI投資システム 深淵-Abyss- V6.0</h2>", unsafe_allow_html=True)
     
-    st.info("💡 以下の指示文の右上にある「コピーマーク（四角が2つ重なったアイコン）」をクリックし、AIに送信してCSVデータを作成させてください。")
+    # --- 指示コピーエリア（Ver 4.0再現） ---
+    st.info("🔴 以下のボタンを押して指示文を表示・コピーし、AIに送信してください。")
     
     ai_prompt = """あなたはプロの競馬データアナリストです。指定したレースの出走馬データを収集し、以下のCSVフォーマットで出力してください。※ヘッダー行は必ず含めてください。
 
 【指定CSVフォーマット】
-馬番,馬名,枠番,単勝オッズ,過去距離,過去走破タイム,過去馬場抵抗係数,過去斤量,今回斤量,年齢月換算,過去年齢月換算,過去スコア履歴,過去ペース係数,上がり3F,脚質,ポジションスコア,騎手名,騎手ランク,逃げ馬フラグ
+馬番,馬名,枠番,単勝オッズ,過去距離,過去走破タイム,過去馬場抵抗係数,過去斤量,今回斤量,年齢月換算,過去年齢月換算,過去スコア履歴,過去ペース係数,上がり3F,脚質,ポジションスコア,騎手名,騎手ランク,逃げ馬フラグ"""
 
-【出力データ例】
-1,グランソレイユ,1,2.5,1600,93.5,1.0,56.0,58.0,72,70,90-88-89,1.05,33.5,FRONT,8,川田将雅,A,False
-4,ライジングスター,2,35.0,1800,108.0,1.02,57.0,55.0,48,46,75-95-70,0.90,32.8,BACK,6,菅原明良,C,False"""
+    if st.button("👁️ AI用データ解析指示をコピー（※クリックで表示）", use_container_width=True, type="primary"):
+        st.success("▼ 以下の文章を全選択してコピーしてください ▼")
+        st.text(ai_prompt)
 
-    # ワンクリックでコピーできるコードブロック
-    st.code(ai_prompt, language="text")
+    # --- データ入力エリア ---
+    st.markdown("<h3 style='text-align: center; color: #333333 !important;'>👀 AI抽出データをここに貼り付け 👀</h3>", unsafe_allow_html=True)
+    
+    input_text = st.text_area("CSVデータ貼り付け", height=200, label_visibility="collapsed", placeholder="ここにCSVデータを貼り付けてください...")
 
-    st.markdown("### 👀 AI抽出データをここに貼り付け 👀")
-    input_text = st.text_area("", height=200, placeholder="馬番,馬名,枠番,単勝オッズ...")
-
+    # --- 実行ボタンエリア ---
     col1, col2 = st.columns(2)
     with col1:
         run_btn = st.button("🚀 期待値(EV)解析を実行", use_container_width=True, type="primary")
@@ -256,22 +267,18 @@ def main():
                 
                 st.success("解析完了！期待値(EV)ランキングを算出しました。")
                 
-                # 展開予測と複勝有力候補の表示
-                st.markdown(f"#### 🎯 展開予測: **{report['predicted_pace']}ペース**")
-                st.warning(f"🥈 複勝圏内 有力候補 (上位3頭): **{', '.join(report['place_candidates'])}**")
+                st.markdown(f"<h3 style='color: #333333 !important;'>🎯 深淵シミュレーション展開予測: {report['predicted_pace']}ペース</h3>", unsafe_allow_html=True)
+                st.warning(f"🥈 **複勝圏内 有力候補 (上位3頭): {', '.join(report['place_candidates'])}**")
                 
-                # データフレームのスタイリング
                 res_df = pd.DataFrame(report['rankings'])
                 
                 def style_dataframe(row):
                     styles = [''] * len(row)
-                    # EVが1.0以上なら行全体を薄緑に
                     if row['期待値(EV)'] >= 1.0:
-                        styles = ['background-color: #d4edda'] * len(row)
-                    # バグが発生している場合はオッズバグ列を赤文字強調
+                        styles = ['background-color: #d4edda; color: #155724'] * len(row)
                     if row['オッズバグ'] == '🚩発生!!':
                         bug_idx = row.index.get_loc('オッズバグ')
-                        styles[bug_idx] = styles[bug_idx] + '; color: red; font-weight: bold'
+                        styles[bug_idx] = styles[bug_idx] + '; color: #cc0000; font-weight: bold'
                     return styles
 
                 st.dataframe(res_df.style.apply(style_dataframe, axis=1), use_container_width=True)
