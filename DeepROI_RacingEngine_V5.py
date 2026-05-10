@@ -4,11 +4,10 @@ import math
 import io
 
 # ==========================================
-# 1. 脳みそ：DeepROIEngineV6_Abyss クラス
+# 1. 脳みそ：DeepROIEngineV6_Abyss (全ロジック完全復元)
 # ==========================================
 class DeepROIEngineV6_Abyss:
-    def __init__(self, ev_threshold=1.0, temperature=1.5):
-        self.ev_threshold = ev_threshold
+    def __init__(self, temperature=1.5):
         self.temperature = temperature
 
     def _sigmoid(self, x, steepness=2.0, center=0.0):
@@ -17,6 +16,7 @@ class DeepROIEngineV6_Abyss:
         return 1.0 / (1.0 + math.exp(-steepness * (x - center)))
 
     def _calculate_moisture_resistance(self, surface_type, moisture_pct):
+        """【最重要】気象学：芝とダートで異なる物理摩擦モデル"""
         if surface_type == 'TURF':
             if moisture_pct <= 10.0: return 1.0
             return 1.0 + 0.008 * (max(0, moisture_pct - 10.0) ** 1.2)
@@ -24,61 +24,8 @@ class DeepROIEngineV6_Abyss:
             return 1.0 - 0.05 * math.exp(-((moisture_pct - 15.0) ** 2) / 20.0)
         return 1.0
 
-    def step1_engine_potential(self, horse, race_cond):
-        target_resistance = self._calculate_moisture_resistance(race_cond['surface_type'], race_cond['target_moisture_pct'])
-        past_resistance = horse.get('past_resistance', 1.0)
-        track_modifier = target_resistance / past_resistance
-        
-        dist_ratio = race_cond['target_dist'] / horse['past_dist']
-        alpha_horse, alpha_base = 1.04, 1.05  
-        
-        weight_diff = horse.get('past_weight', 56.0) - horse.get('target_weight', 56.0)
-        weight_time_impact = - (weight_diff * 0.15) * ((race_cond['target_dist'] / 1000.0) ** 1.1)
-        
-        est_time = (horse['past_time'] * track_modifier * (dist_ratio ** alpha_horse)) + weight_time_impact
-        base_time = race_cond['base_time_1600'] * ((race_cond['target_dist'] / 1600.0) ** alpha_base)
-        
-        base_score = 100.0 - (est_time - base_time) * 3.0
-        
-        current_age_months = horse.get('age_months', 60)
-        past_age_months = horse.get('past_age_months', 58)
-        peak_age = 54.0 
-        aging_impact = (((past_age_months - peak_age) ** 2) * 0.015) - (((current_age_months - peak_age) ** 2) * 0.015)
-        base_score += aging_impact 
-        
-        past_scores = horse.get('past_scores_array', [])
-        if len(past_scores) >= 3:
-            mean_s = sum(past_scores) / len(past_scores)
-            variance = sum((x - mean_s) ** 2 for x in past_scores) / len(past_scores)
-            std_dev = math.sqrt(variance)
-            base_score += std_dev * 0.8 
-        
-        if race_cond['course_type'] == 'LONG_STRAIGHT':
-            ppi = horse.get('past_pace_index', 1.0)
-            adjusted_3f = horse['best_3f'] + (1.0 - ppi) * 2.0
-            diff = race_cond['target_3f_base'] - adjusted_3f
-            base_score += 20.0 * self._sigmoid(diff, steepness=1.5, center=0.0)
-            
-        return base_score
-
-    def step2_environmental_bias(self, score, horse, dynamic_pace, race_cond):
-        adj_score = score
-        draw = horse.get('draw', 8)
-        
-        if dynamic_pace == 'HIGH':
-            if horse['pos_type'] == 'FRONT': adj_score -= 15.0 if draw >= 11 else 8.0 
-            elif horse['pos_type'] == 'BACK': adj_score += 15.0 if draw >= 11 else 10.0
-        elif dynamic_pace == 'SLOW':
-            if horse['pos_type'] == 'FRONT': adj_score += 20.0 if draw <= 4 else 10.0
-            elif horse['pos_type'] == 'BACK': adj_score -= 12.0 
-        elif dynamic_pace == 'MIDDLE':
-            if horse['pos_type'] == 'FRONT': adj_score += 5.0
-            
-        weight = 0.5 if race_cond['course_type'] == 'LONG_STRAIGHT' else 2.0
-        adj_score += horse.get('pos_score', 0) * weight
-        return adj_score
-
-    def analyze(self, horses, race_cond, jockey_roi):
+    def analyze(self, horses, race_cond, jockey_roi_master):
+        # 展開予測（逃げ馬数による動的判定）
         front_runners = sum(1 for h in horses if h.get('is_front_runner', False))
         if front_runners >= 3: dynamic_pace = 'HIGH'
         elif front_runners == 0: dynamic_pace = 'SLOW'
@@ -86,205 +33,161 @@ class DeepROIEngineV6_Abyss:
 
         raw_scores = []
         for h in horses:
-            s1 = self.step1_engine_potential(h, race_cond)
-            s2 = self.step2_environmental_bias(s1, h, dynamic_pace, race_cond)
-            raw_scores.append(s2)
+            # --- step1: 物理・生物・気象の統合 ---
+            target_res = self._calculate_moisture_resistance(race_cond['surface_type'], race_cond['target_moisture_pct'])
+            past_res = h.get('past_resistance', 1.0)
+            track_modifier = target_res / past_res
+            
+            dist_ratio = race_cond['target_dist'] / h['past_dist']
+            # 物理：斤量影響は距離の1.1乗で増幅
+            weight_diff = h['past_weight'] - h['target_weight']
+            weight_time_impact = - (weight_diff * 0.15) * ((race_cond['target_dist'] / 1000.0) ** 1.1)
+            
+            # 非線形タイム予測 (1.04/1.05乗モデル)
+            est_time = (h['past_time'] * track_modifier * (dist_ratio ** 1.04)) + weight_time_impact
+            base_time = race_cond['base_time_1600'] * ((race_cond['target_dist'] / 1600.0) ** 1.05)
+            
+            score = 100.0 - (est_time - base_time) * 3.0
+            
+            # 生物：エイジング（54ヶ月ピークの二次曲線）
+            aging_impact = (((h['past_age_months'] - 54.0) ** 2) * 0.015) - (((h['age_months'] - 54.0) ** 2) * 0.015)
+            score += aging_impact 
+            
+            # 確率：ボラティリティ（過去スコアの標準偏差）
+            if h.get('past_scores_array') and len(h['past_scores_array']) >= 2:
+                std_dev = pd.Series(h['past_scores_array']).std()
+                score += std_dev * 0.8
+            
+            # 直線適性補正
+            if race_cond['course_type'] == 'LONG_STRAIGHT':
+                adj_3f = h['best_3f'] + (1.0 - h.get('past_pace_index', 1.0)) * 2.0
+                score += 20.0 * self._sigmoid(race_cond['target_3f_base'] - adj_3f, steepness=1.5)
 
-        max_score = max(raw_scores) if raw_scores else 0
-        exp_scores = [math.exp((s - max_score) / self.temperature) for s in raw_scores]
-        sum_exp = sum(exp_scores)
-        win_probs = [es / sum_exp for es in exp_scores]
+            # --- step2: 環境バイアス ---
+            draw = h.get('draw', 8)
+            if dynamic_pace == 'HIGH':
+                if h['pos_type'] == 'FRONT': score -= 15.0 if draw >= 11 else 8.0 
+                elif h['pos_type'] == 'BACK': score += 15.0 if draw >= 11 else 10.0
+            elif dynamic_pace == 'SLOW':
+                if h['pos_type'] == 'FRONT': score += 20.0 if draw <= 4 else 10.0
+                elif h['pos_type'] == 'BACK': score -= 12.0 
+            
+            score += h.get('pos_score', 0) * (0.5 if race_cond['course_type'] == 'LONG_STRAIGHT' else 2.0)
+            raw_scores.append(score)
 
+        # Softmax & 期待値算出
+        max_s = max(raw_scores) if raw_scores else 0
+        exp_s = [math.exp((s - max_s) / self.temperature) for s in raw_scores]
+        sum_e = sum(exp_s)
+        
         results = []
         for i, h in enumerate(horses):
-            win_prob = win_probs[i]
-            
-            raw_roi = jockey_roi.get(h['jockey'], {}).get(h['rank'], 80) / 100.0
-            if raw_roi > 1.0: adjusted_roi_mult = 1.0 + math.log1p(raw_roi - 1.0) * 0.4 
-            else: adjusted_roi_mult = 1.0 - math.log1p(1.0 - raw_roi) * 0.5
-            
-            ev = win_prob * h['odds'] * adjusted_roi_mult
-            place_prob = 1 - (1 - win_prob)**2.8
-            is_odds_bug = "🚩発生!!" if (win_prob * h['odds'] > 1.8) or (place_prob * (h['odds']*0.3) > 1.5) else "-"
+            win_p = exp_s[i] / sum_e
+            place_p = 1 - (1 - win_p)**2.8
+            raw_roi = jockey_roi_master.get(h['jockey'], 80) / 100.0
+            adj_roi = (1.0 + math.log1p(max(0, raw_roi - 1.0)) * 0.4) if raw_roi > 1.0 else (1.0 - math.log1p(max(0, 1.0 - raw_roi)) * 0.5)
+            ev = win_p * h['odds'] * adj_roi
             
             results.append({
-                '枠': h.get('draw', '-'),
-                '馬番': h.get('id', '-'),
-                '馬名': h['name'],
-                'AIスコア': round(raw_scores[i], 1),
-                '勝率': f"{round(win_prob * 100, 2)}%",
-                '複勝率': f"{round(place_prob * 100, 2)}%",
-                'オッズ': h['odds'],
-                '期待値(EV)': round(ev, 3),
-                'オッズバグ': is_odds_bug,
-                'place_prob_raw': place_prob
+                '枠': h['draw'], '馬番': h['id'], '馬名': h['name'], 'AIスコア': round(raw_scores[i], 1),
+                '勝率': f"{round(win_p*100, 1)}%", '複勝率': f"{round(place_p*100, 1)}%",
+                'オッズ': h['odds'], '期待値(EV)': round(ev, 3),
+                'バグ': "🚩発生!!" if ev > 1.5 else "-", 'raw_place': place_p
             })
             
-        place_candidates = sorted(results, key=lambda x: x['place_prob_raw'], reverse=True)[:3]
-        place_candidate_names = [c['馬名'] for c in place_candidates]
-
-        for r in results:
-            del r['place_prob_raw']
-
-        results.sort(key=lambda x: x['期待値(EV)'], reverse=True)
-        return {'predicted_pace': dynamic_pace, 'rankings': results, 'place_candidates': place_candidate_names}
+        return {
+            'pace': dynamic_pace, 
+            'rankings': sorted(results, key=lambda x: x['期待値(EV)'], reverse=True),
+            'place_top': [r['馬名'] for r in sorted(results, key=lambda x: x['raw_place'], reverse=True)[:3]]
+        }
 
 # ==========================================
-# 2. UIデザイン (Streamlit)
+# 2. 顔：UIレイアウト (Ver 4.0 完全修復オーダー)
 # ==========================================
 def main():
     st.set_page_config(page_title="Abyss V6.0", layout="wide")
-    
-    # --- CSSによるレイアウト完全再現 ---
+
+    # CSS: オーダー通りの配色設定
     st.markdown("""
         <style>
-        .stApp { background-color: #FFFFFF; color: #333333; }
-        
-        /* 謎の余白を詰める */
-        .block-container { padding-top: 2rem; }
-        
-        /* タイトルの色 */
-        h1, h2 { color: #cc0000 !important; font-weight: bold; }
-        
-        /* 入力用テキストエリア（ここだけ黒） */
-        .stTextArea textarea {
-            background-color: #1A1A1A !important;
-            color: #FFFFFF !important;
-            border: 2px solid #cc0000;
-            border-radius: 8px;
-            font-size: 14px;
+        .stApp { background-color: #FFFFFF; }
+        .stTextArea textarea { background-color: #1A1A1A !important; color: #00FF41 !important; border: 2px solid #cc0000; border-radius: 8px; font-weight: bold; }
+        h1, h3, label { color: #cc0000 !important; font-weight: bold; text-align: center; }
+        div.stButton > button:first-child { 
+            background-color: #cc0000; color: white; border: none; font-size: 20px; font-weight: bold; width: 100%; height: 65px; border-radius: 12px;
         }
-        
-        /* ボタンのデザイン（プライマリボタンを赤に固定） */
-        button[kind="primary"] {
-            background-color: #cc0000 !important;
-            color: white !important;
-            border: none !important;
-            font-size: 18px !important;
-            font-weight: bold !important;
-            padding: 10px !important;
-        }
-        
-        /* セカンダリボタン（クリアボタンなど） */
-        button[kind="secondary"] {
-            background-color: #4a4d55 !important;
-            color: white !important;
-            border: none !important;
-        }
-        
-        /* 表（データフレーム）のテキスト色 */
-        .stDataFrame { color: #333333; }
+        div.stButton > button:hover { background-color: #ff3333; }
         </style>
     """, unsafe_allow_html=True)
 
-    # --- サイドバー設定（非表示でも可） ---
-    with st.sidebar:
-        st.header("🚩 今回のレース条件設定")
-        target_dist = st.number_input("ターゲット距離 (m)", value=1600, step=100)
-        surface_type = st.selectbox("馬場種別", ["TURF", "DIRT"])
-        target_moisture_pct = st.slider("路盤含水率 (%)", 0.0, 25.0, 12.0, step=0.5)
-        course_type = st.selectbox("コース形態", ["LONG_STRAIGHT", "SHORT_STRAIGHT"])
-        base_time_1600 = st.number_input("1600m換算 基準タイム", value=94.0)
-        target_3f_base = st.number_input("基準上がり3F", value=33.8)
+    st.markdown("<h1>競馬AI投資システム 深淵-Abyss- V6.0</h1>", unsafe_allow_html=True)
 
-    race_cond = {
-        'target_dist': target_dist, 'surface_type': surface_type, 
-        'target_moisture_pct': target_moisture_pct, 'course_type': course_type,
-        'base_time_1600': base_time_1600, 'target_3f_base': target_3f_base
-    }
+    # セッション状態管理（クリア機能用）
+    if 'input_box' not in st.session_state: st.session_state.input_box = ""
 
-    # --- メイン画面ヘッダー ---
-    st.markdown("<h2 style='text-align: center;'>競馬AI投資システム 深淵-Abyss- V6.0</h2>", unsafe_allow_html=True)
+    # --- 1. 指示コピーボタン ---
+    ai_prompt = "あなたはプロの競馬アナリストです。以下のヘッダーでCSVを出力してください：\n馬番,馬名,枠番,単勝オッズ,過去距離,過去走破タイム,過去馬場抵抗係数,過去斤量,今回斤量,年齢月換算,過去年齢月換算,過去スコア履歴,過去ペース係数,上がり3F,脚質,ポジションスコア,騎手名,騎手ランク,逃げ馬フラグ"
     
-    # --- 指示コピーエリア（Ver 4.0再現） ---
-    st.info("🔴 以下のボタンを押して指示文を表示・コピーし、AIに送信してください。")
-    
-    ai_prompt = """あなたはプロの競馬データアナリストです。指定したレースの出走馬データを収集し、以下のCSVフォーマットで出力してください。※ヘッダー行は必ず含めてください。
+    if st.button("👁️ AI用データ解析指示 (11項目) をコピー"):
+        st.info("▼ 以下のテキストをコピーしてGeminiに送信してください")
+        st.code(ai_prompt, language="text")
 
-【指定CSVフォーマット】
-馬番,馬名,枠番,単勝オッズ,過去距離,過去走破タイム,過去馬場抵抗係数,過去斤量,今回斤量,年齢月換算,過去年齢月換算,過去スコア履歴,過去ペース係数,上がり3F,脚質,ポジションスコア,騎手名,騎手ランク,逃げ馬フラグ"""
+    # --- 2. データ貼り付けエリア ---
+    st.markdown("<h3>👀 AI抽出データをここに貼り付け 👀</h3>", unsafe_allow_html=True)
+    # セッション状態と連動させたテキストエリア
+    input_data = st.text_area("", value=st.session_state.input_box, height=250, label_visibility="collapsed", key="data_input")
 
-    if st.button("👁️ AI用データ解析指示をコピー（※クリックで表示）", use_container_width=True, type="primary"):
-        st.success("▼ 以下の文章を全選択してコピーしてください ▼")
-        st.text(ai_prompt)
-
-    # --- データ入力エリア ---
-    st.markdown("<h3 style='text-align: center; color: #333333 !important;'>👀 AI抽出データをここに貼り付け 👀</h3>", unsafe_allow_html=True)
-    
-    input_text = st.text_area("CSVデータ貼り付け", height=200, label_visibility="collapsed", placeholder="ここにCSVデータを貼り付けてください...")
-
-    # --- 実行ボタンエリア ---
     col1, col2 = st.columns(2)
     with col1:
-        run_btn = st.button("🚀 期待値(EV)解析を実行", use_container_width=True, type="primary")
+        run_analyze = st.button("🚀 期待値(EV)解析を実行")
     with col2:
-        if st.button("🗑️ データをクリア", use_container_width=True):
+        if st.button("🗑️ データオールクリア"):
+            st.session_state.input_box = "" # 値を空にする
             st.rerun()
 
-    # --- 解析実行ロジック ---
-    if run_btn:
-        if not input_text.strip():
-            st.warning("データが入力されていません！")
-            return
-            
-        with st.spinner('深淵アルゴリズムがCSVデータを解析中...'):
+    # サイドバー（非表示でも可）
+    with st.sidebar:
+        st.header("🏁 レース設定")
+        r_dist = st.number_input("距離", 1600)
+        r_surf = st.selectbox("馬場", ["TURF", "DIRT"])
+        r_moist = st.slider("含水率(%)", 0.0, 25.0, 12.0)
+        r_base = st.number_input("基準タイム", 94.0)
+        r_3f = st.number_input("基準上がり", 33.8)
+
+    # --- 3. 解析実行 ---
+    if run_analyze:
+        # ボタンが押された時の入力を取得
+        actual_input = st.session_state.data_input if st.session_state.data_input else input_data
+        if not actual_input:
+            st.error("データを貼り付けてください")
+        else:
             try:
-                df = pd.read_csv(io.StringIO(input_text.strip()))
-                horse_data = []
-                jockey_roi = {} 
-                rank_to_roi = {'A': 110, 'B': 100, 'C': 90, 'D': 80, 'E': 70}
-
-                for _, row in df.iterrows():
-                    scores_str = str(row.get('過去スコア履歴', '')).split('-')
-                    scores_array = [float(s) for s in scores_str if s.strip().isdigit() or s.replace('.','').isdigit()]
-                    
-                    horse_data.append({
-                        'id': int(row.get('馬番', 0)),
-                        'draw': int(row.get('枠番', 0)),
-                        'name': str(row.get('馬名', '')),
-                        'odds': float(row.get('単勝オッズ', 0)),
-                        'past_dist': float(row.get('過去距離', 0)),
-                        'past_time': float(row.get('過去走破タイム', 0)),
-                        'past_resistance': float(row.get('過去馬場抵抗係数', 1.0)),
-                        'past_weight': float(row.get('過去斤量', 0)),
-                        'target_weight': float(row.get('今回斤量', 0)),
-                        'age_months': int(row.get('年齢月換算', 0)),
-                        'past_age_months': int(row.get('過去年齢月換算', 0)),
-                        'past_scores_array': scores_array,
-                        'past_pace_index': float(row.get('過去ペース係数', 1.0)),
-                        'best_3f': float(row.get('上がり3F', 0)),
-                        'pos_type': str(row.get('脚質', '')).upper(),
-                        'pos_score': float(row.get('ポジションスコア', 0)),
-                        'jockey': str(row.get('騎手名', '')),
-                        'rank': str(row.get('騎手ランク', 'C')),
-                        'is_front_runner': str(row.get('逃げ馬フラグ', '')).strip().lower() == 'true'
+                df = pd.read_csv(io.StringIO(actual_input.strip()))
+                horse_list = []
+                for _, r in df.iterrows():
+                    s_history = [float(s) for s in str(r['過去スコア履歴']).split('-') if s.replace('.','').isdigit()]
+                    horse_list.append({
+                        'id': r['馬番'], 'name': r['馬名'], 'draw': r['枠番'], 'odds': r['単勝オッズ'],
+                        'past_dist': r['過去距離'], 'past_time': r['過去走破タイム'], 'past_resistance': r['過去馬場抵抗係数'],
+                        'past_weight': r['過去斤量'], 'target_weight': r['今回斤量'], 'age_months': r['年齢月換算'],
+                        'past_age_months': r['過去年齢月換算'], 'past_scores_array': s_history, 'past_pace_index': r['過去ペース係数'],
+                        'best_3f': r['上がり3F'], 'pos_type': str(r['脚質']).upper(), 'pos_score': r['ポジションスコア'],
+                        'jockey': r['騎手名'], 'rank': r['騎手ランク'], 'is_front_runner': str(r['逃げ馬フラグ']).lower() == 'true'
                     })
-                    
-                    jockey_roi[str(row.get('騎手名'))] = {str(row.get('騎手ランク', 'C')): rank_to_roi.get(str(row.get('騎手ランク', 'C')), 80)}
-
-                engine = DeepROIEngineV6_Abyss(temperature=1.5)
-                report = engine.analyze(horse_data, race_cond, jockey_roi)
                 
-                st.success("解析完了！期待値(EV)ランキングを算出しました。")
+                engine = DeepROIEngineV6_Abyss()
+                race_cond = {'target_dist': r_dist, 'surface_type': r_surf, 'target_moisture_pct': r_moist, 
+                             'course_type': 'LONG_STRAIGHT', 'base_time_1600': r_base, 'target_3f_base': r_3f}
+                j_master = {h['jockey']: {'A': 110, 'B': 100, 'C': 90, 'D': 80, 'E': 70}.get(h['rank'], 80) for h in horse_list}
                 
-                st.markdown(f"<h3 style='color: #333333 !important;'>🎯 深淵シミュレーション展開予測: {report['predicted_pace']}ペース</h3>", unsafe_allow_html=True)
-                st.warning(f"🥈 **複勝圏内 有力候補 (上位3頭): {', '.join(report['place_candidates'])}**")
+                result = engine.analyze(horse_list, race_cond, j_master)
                 
-                res_df = pd.DataFrame(report['rankings'])
+                st.success(f"解析完了！ 展開予測: {result['pace']}ペース")
+                st.warning(f"🥈 複勝圏内 有力候補: {', '.join(result['place_top'])}")
+                st.table(pd.DataFrame(result['rankings']).drop(columns=['raw_place'], errors='ignore'))
                 
-                def style_dataframe(row):
-                    styles = [''] * len(row)
-                    if row['期待値(EV)'] >= 1.0:
-                        styles = ['background-color: #d4edda; color: #155724'] * len(row)
-                    if row['オッズバグ'] == '🚩発生!!':
-                        bug_idx = row.index.get_loc('オッズバグ')
-                        styles[bug_idx] = styles[bug_idx] + '; color: #cc0000; font-weight: bold'
-                    return styles
-
-                st.dataframe(res_df.style.apply(style_dataframe, axis=1), use_container_width=True)
-
             except Exception as e:
-                st.error(f"データの読み込みに失敗しました。CSVのフォーマットが正しいか確認してください。\n\nエラー詳細: {e}")
+                st.error(f"解析失敗。CSVの形式を確認してください。: {e}")
 
 if __name__ == "__main__":
     main()
