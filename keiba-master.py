@@ -18,9 +18,11 @@ def analyze_img(api_key, img_bytes):
     try:
         r = requests.post(url, headers={'Content-Type':'application/json'}, data=json.dumps(data), timeout=30)
         t = r.json()['candidates'][0]['content']['parts'][0]['text']
-        return t.replace('```csv','').replace('
-```','').strip()
+        # GitHubのバグを回避するため、記号を文字コード(chr)で指定して除去
+        t = t.replace(chr(96), "").replace("csv", "")
+        return t.strip()
     except Exception as e: return f"エラー:{e}"
+
 # --- 画面構成 ---
 st.set_page_config(page_title="競馬AI Ver 4.0")
 st.markdown("<h3 style='text-align:center;'>🏇 競馬AI解析 Ver 4.0</h3>", unsafe_allow_html=True)
@@ -43,7 +45,6 @@ if st.button("🚀 期待値計算", type="primary") and raw:
         df.columns = ['馬番','馬名','枠','オッズ','上がり3F','ポジ','鬼脚','騎手','単回','複回','枠B'][:len(df.columns)]
         for c in df.columns: df[c] = df[c].apply(safe_f)
         
-        # 期待値計算ロジック
         df['score'] = ((df['単回']-df['単回'].mean())/df['単回'].std()).fillna(0) * 1.5 + ((df['上がり3F'].mean()-df['上がり3F'])/df['上がり3F'].std()).fillna(0) * 1.0
         df['ev'] = (np.exp(df['score'])/np.exp(df['score']).sum()) * df['オッズ']
         
