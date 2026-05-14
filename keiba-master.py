@@ -56,9 +56,11 @@ def analyze_image_with_gemini(api_key, image_bytes):
     
     # AIからの返答テキストを抽出
     extracted_text = data['candidates'][0]['content']['parts'][0]['text']
-    # コードブロック記号が含まれてしまった場合の保険としての除去処理
+    
+    # 【修正箇所】コードブロック記号が含まれてしまった場合の保険としての除去処理（改行エラーを修正しました）
     extracted_text = extracted_text.replace("
 ```csv", "").replace("```", "").strip()
+    
     return extracted_text
 
 # ==========================================
