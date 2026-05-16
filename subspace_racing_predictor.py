@@ -1,132 +1,130 @@
 import numpy as np
 import pandas as pd
 
-class SubspaceRacingPredictor:
-    def __init__(self, lambda_param=0.9, K=3):
+class ContextualSubspacePredictorV5:
+    def __init__(self, base_lambda=0.9, K=3):
         """
-        部分空間正則化を用いた競馬予測モデル (Ver 4.5)
-        lambda_param: 0.9 (人間の経験則・オッズ・適性を90%重視し、直近データで10%補正)
+        Ver 5.0: 文脈理解型・部分空間正則化モデル
+        base_lambda: 基本の正則化パラメータ
+        K: 抽出する主成分(ファクター)の数
         """
-        self.lambda_param = lambda_param
+        self.base_lambda = base_lambda
         self.K = K
         self.top_eigenvectors = None
-        
+
     def _normalize_features(self, df):
-        """データを標準化する（平均0, 分散1）"""
+        """データを標準化（偏差値化：別路線からの比較を可能にする）"""
         df_norm = df.copy()
         for col in df.columns:
             df_norm[col] = (df[col] - df[col].mean()) / (df[col].std() + 1e-8)
         return df_norm
 
-    def fit_extract_factors(self, X_recent, C_0):
-        """直近データと事前知識(C_0)から最強ファクター空間を抽出"""
-        X_norm = self._normalize_features(X_recent)
-        C_t = np.corrcoef(X_norm.T) 
+    def apply_context_filters(self, df):
+        """
+        [Ver 5.0 コアロジック] 馬ごとの文脈（ローテーション、格）を数値に翻訳し補正する
+        """
+        df_context = df.copy()
         
-        # 式(13): 正則化 (直近データ10% + 普遍的経験則90%)
-        C_reg = (1 - self.lambda_param) * C_t + self.lambda_param * C_0
+        # ① 格・対戦相手補正（Race Level Adjustment）
+        # 前走が格下なら直近スコアを割引、牡馬混合重賞などハイレベルなら割増
+        df_context['補正後_上がり3F'] = df_context['上がり3F'] * df_context['前走レースレベル係数']
+        df_context['補正後_惜敗度'] = df_context['惜敗度(タイム差)'] * df_context['前走レースレベル係数']
+
+        # ② ローテーション・休養補正（Dynamic Penalty）
+        # 休み明け（例: 3ヶ月=約90日以上）は直近データの信頼度を下げる
+        decay_factor = np.exp(-df_context['前走からの日数'] / 180.0) # 時間減衰関数
         
-        # 式(14): 固有値分解 (K次元への圧縮によりバランス崩壊を防ぐ)
+        # ③ ステップレース特例（Target Step Exemption）
+        # 指定された王道ローテ（フラグ=1）なら、減衰ペナルティを無効化し本気度を加算
+        step_bonus = df_context['王道ステップフラグ'] * 1.2
+        final_decay = np.where(df_context['王道ステップフラグ'] == 1, 1.0, decay_factor)
+
+        # 直近の物理データを文脈で最終補正
+        df_context['最終_直近パフォーマンス'] = (df_context['補正後_上がり3F'] + df_context['補正後_惜敗度']) * final_decay * (1 + step_bonus)
+        
+        return df_context
+
+    def fit_and_predict(self, df_today, C_0_matrix, win_weights):
+        """文脈補正後のデータで主成分を抽出し、スコアを計算"""
+        # 文脈フィルターを適用
+        df_filtered = self.apply_context_filters(df_today)
+        
+        # モデルに投入する特徴量を選択
+        features = ['オッズ期待勝率', '最終_直近パフォーマンス', '距離・コース適性']
+        X_input = df_filtered[features]
+        X_norm = self._normalize_features(X_input)
+        
+        # 相関行列と正則化
+        C_t = np.corrcoef(X_norm.T)
+        C_reg = (1 - self.base_lambda) * C_t + self.base_lambda * C_0_matrix
+        
+        # 固有値分解 (次元圧縮)
         eigenvalues, eigenvectors = np.linalg.eigh(C_reg)
         idx = np.argsort(eigenvalues)[::-1]
         self.top_eigenvectors = eigenvectors[:, idx][:, :self.K]
-        return self.top_eigenvectors
-
-    def predict_scores(self, X_today, win_weights):
-        """抽出されたファクターから単勝スコアを算出"""
-        X_norm = self._normalize_features(X_today)
+        
+        # スコア算出
         factor_scores = np.dot(X_norm.values, self.top_eigenvectors)
-        win_scores = np.dot(factor_scores, win_weights)
+        # K個のファクターの重みが足りない場合は自動調整する安全装置
+        actual_k = factor_scores.shape[1]
+        win_scores = np.dot(factor_scores, win_weights[:actual_k])
+        
         return win_scores
 
-def calculate_expected_value_and_mark(df, threshold_ev=1.5):
-    """
-    スコアから予測勝率と期待値(EV)を割り出し、印をつける
-    """
-    scores = df['単勝スコア'].values
+def calculate_ev(df, scores, threshold_ev=1.5):
+    """スコアから期待値(EV)を算出し判定マークをつける"""
     exp_scores = np.exp(scores - np.max(scores)) # Softmax
-    df['予測勝率(%)'] = (exp_scores / exp_scores.sum()) * 100
+    win_probs = (exp_scores / exp_scores.sum())
     
-    df['実際の単勝オッズ'] = 1 / df['オッズ期待勝率']
-    df['期待値(EV)'] = (df['予測勝率(%)'] / 100) * df['実際の単勝オッズ']
+    actual_odds = 1 / df['オッズ期待勝率']
+    ev = win_probs * actual_odds
     
-    def apply_mark(row):
-        base_name = row.name
-        if row['期待値(EV)'] >= threshold_ev:
-            return f"🔴【超抜🉐買い!!】 {base_name}"
-        elif row['期待値(EV)'] >= 1.0:
-            return f"🟡【ヒモ候補】 {base_name}"
-        else:
-            return f"　 {base_name} (見送り)"
-            
-    df['判定馬名'] = df.apply(apply_mark, axis=1)
-    return df
+    results = df[['馬名', 'オッズ期待勝率']].copy()
+    results['単勝オッズ'] = actual_odds
+    results['期待値(EV)'] = ev
+    
+    def apply_mark(ev_val):
+        if ev_val >= threshold_ev: return "🔴【超抜🉐買い!!】"
+        elif ev_val >= 1.0: return "🟡【ヒモ候補】"
+        else: return "❌ (見送り)"
+        
+    results['判定'] = results['期待値(EV)'].apply(apply_mark)
+    return results
 
 # ==========================================
-# メイン実行ブロック
+# 実行ブロック（新潟大賞典の「エラー」をどう処理するか検証）
 # ==========================================
 if __name__ == "__main__":
-    np.random.seed(42) # 再現性のため固定
-    N_horses = 18
-    
-    # --- 1. 出馬表データ作成 (第6のファクター「距離適性」を追加) ---
+    # 新潟大賞典でシステムが間違えた14番と、勝った3番のシミュレーションデータ
     data = {
-        "オッズ期待勝率": np.random.uniform(0.01, 0.4, N_horses),
-        "人気ギャップ": np.random.uniform(-5, 5, N_horses),     
-        "惜敗度(タイム差)": np.random.uniform(-1.5, 0, N_horses),
-        "上がり3F": -np.random.uniform(33.0, 36.5, N_horses),    
-        "通過順位平均": -np.random.uniform(1, 15, N_horses),     
-        "距離適性スコア": np.random.uniform(0.0, 0.5, N_horses)  # NEW: 0.0〜1.0で評価
+        "馬名": ["グランディア(3番)", "シンハナーダ(14番)", "別路線からの刺客"],
+        "オッズ期待勝率": [1/11.7, 1/8.6, 1/20.0], # 6番人気, 4番人気, 穴馬
+        "上がり3F": [-33.7, -33.5, -34.0], # 全馬直近の脚は使えている(マイナスは速い意味)
+        "惜敗度(タイム差)": [0.0, 0.0, -0.2], 
+        "距離・コース適性": [0.9, 0.9, 0.5],
+        
+        # --- Ver 5.0 追加コンテキスト ---
+        "前走レースレベル係数": [1.0, 0.6, 1.5], # 3番は重賞レベル, 14番は3勝クラス(格下割引), 刺客は牡馬混合G2(割増)
+        "前走からの日数": [30, 105, 45], # 14番は3ヶ月半の休み明け
+        "王道ステップフラグ": [1, 0, 0] # 3番は王道ローテ
     }
-    horse_names = [f"馬番{str(i).zfill(2)}" for i in range(1, N_horses + 1)]
-    df_today = pd.DataFrame(data, index=horse_names)
+    df_test = pd.DataFrame(data)
     
-    # ----------------------------------------------------
-    # 🎯 特殊シミュレーション：NHKマイルCの「11番」と「8番」を再現
-    # ----------------------------------------------------
-    
-    # 【馬番08】(先ほどの激走穴馬パターン)
-    # オッズは低く、距離適性も普通だが、直近の末脚と惜敗度が異常に高い
-    df_today.loc["馬番08", "オッズ期待勝率"] = 0.03 (オッズ約33倍)
-    df_today.loc["馬番08", "上がり3F"] = -33.2
-    df_today.loc["馬番08", "惜敗度(タイム差)"] = -0.1
-    df_today.loc["馬番08", "距離適性スコア"] = 0.3
-    
-    # 【馬番11】(今回システムが取りこぼした「距離戻り」のG1馬パターン)
-    # 前走大敗でオッズ・末脚・位置取りは最悪。しかし「距離適性スコア」だけが満点(1.0)
-    df_today.loc["馬番11", "オッズ期待勝率"] = 0.05 (オッズ20倍)
-    df_today.loc["馬番11", "上がり3F"] = -36.5  (前走大敗のノイズ)
-    df_today.loc["馬番11", "通過順位平均"] = -16 (前走大敗のノイズ)
-    df_today.loc["馬番11", "距離適性スコア"] = 1.0  (同距離複勝率100％を数値化)
-    
-    # --- 2. C_0 (事前知識の相関行列) の 6x6 拡張 ---
-    # 右端と下端に「距離適性」の行と列を追加。
-    # 距離適性は「オッズ(人気)」や「惜敗度」と少し連動すると定義する
-    C_0_matrix = np.array([
-        [1.0,  0.6,  0.4,  0.1,  0.2,  0.5], # オッズ
-        [0.6,  1.0,  0.5,  0.0,  0.1,  0.3], # ギャップ
-        [0.4,  0.5,  1.0,  0.3,  0.2,  0.4], # 惜敗度
-        [0.1,  0.0,  0.3,  1.0, -0.4,  0.2], # 上がり3F
-        [0.2,  0.1,  0.2, -0.4,  1.0,  0.1], # 通過順位
-        [0.5,  0.3,  0.4,  0.2,  0.1,  1.0]  # 距離適性スコア (NEW)
+    # 3x3の事前知識行列 (オッズ, 直近パフォーマンス, 適性)
+    C_0 = np.array([
+        [1.0,  0.5,  0.4],
+        [0.5,  1.0,  0.3],
+        [0.4,  0.3,  1.0]
     ])
     
-    # --- 3. モデルの実行とスコア算出 ---
-    predictor = SubspaceRacingPredictor(lambda_param=0.9, K=3)
-    predictor.fit_extract_factors(df_today, C_0_matrix)
+    predictor = ContextualSubspacePredictorV5(base_lambda=0.9, K=2)
+    win_weights = np.array([0.7, 0.3]) # 主成分への重み
     
-    # 3つの主要ファクターに対する重み付け (総合力, 過去の不遇度, 能力ポテンシャル)
-    win_weights = np.array([0.6, 0.4, 0.7]) 
-    
-    df_today['単勝スコア'] = predictor.predict_scores(df_today, win_weights)
-    result_df = calculate_expected_value_and_mark(df_today, threshold_ev=1.5)
-    
-    # --- 4. 結果表示 ---
-    display_cols = ['判定馬名', '実際の単勝オッズ', '予測勝率(%)', '期待値(EV)', '単勝スコア']
-    final_output = result_df.sort_values('期待値(EV)', ascending=False)[display_cols]
+    scores = predictor.fit_and_predict(df_test, C_0, win_weights)
+    result_df = calculate_ev(df_test, scores, threshold_ev=1.5)
     
     print("=========================================================")
-    print(" 🏇 Ver 4.5 [距離適性実装版] 予測結果")
+    print(" 🏇 Ver 5.0 [完全コンテキスト解析版] 予測結果")
     print("=========================================================")
     pd.set_option('display.float_format', '{:.2f}'.format)
-    print(final_output.head(8).to_string(index=False))
+    print(result_df[['判定', '馬名', '単勝オッズ', '期待値(EV)']].sort_values('期待値(EV)', ascending=False).to_string(index=False))
