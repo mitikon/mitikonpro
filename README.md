@@ -38,3 +38,11 @@ leading-lambda-collect --start 2010-01-01 --end-exclusive 2026-09-05 --output da
 ```
 
 `--end-exclusive`の日付は保存されません。取引時間中の未確定バーを混入させないため、最後に確定した米国営業日の翌日を指定します。出力CSVの欠損値は意図的に残し、未来方向の補完は行いません。
+
+## 実データ検証
+
+```bash
+leading-lambda-validate --start 2015-01-01 --output artifacts/validation
+```
+
+SPYとQQQについて、ウォークフォワード予測を時点固定CSVに保存し、同じ期間の買い持ち成績と比較します。GitHub Actionsは米国市場終了後の火～土曜日（UTC 02:15、日本時間11:15）に実行し、結果を90日間の成果物として保存します。iPadの電源状態には依存しません。
