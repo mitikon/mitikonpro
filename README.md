@@ -46,3 +46,9 @@ leading-lambda-validate --start 2015-01-01 --output artifacts/validation
 ```
 
 SPYとQQQについて、ウォークフォワード予測を時点固定CSVに保存し、同じ期間の買い持ち成績と比較します。GitHub Actionsは米国市場終了後の火～土曜日（UTC 02:15、日本時間11:15）に実行し、結果を90日間の成果物として保存します。iPadの電源状態には依存しません。
+
+## NYSE永久運用型カレンダー
+
+`exchange_calendars`の`XNYS`を基準に、土日、米国祝日、夏時間、短縮取引の正式な終了時刻を判定します。検証は必ず「最後に終了した営業日」までに限定されます。
+
+災害・追悼など通常規則では予測できない臨時休場は、`config/exceptional_nyse_closures.json`へ`YYYY-MM-DD`形式で追加します。固定日付表ではなく、ライブラリ更新と例外追記によって将来も維持する構造です。
