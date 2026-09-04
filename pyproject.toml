@@ -11,7 +11,7 @@ dependencies = ["numpy>=1.24", "pandas>=2.0"]
 
 [project.optional-dependencies]
 test = ["pytest>=8.0"]
-data = ["yfinance>=0.2.54"]
+data = ["yfinance>=0.2.54", "exchange-calendars>=4.5"]
 
 [project.scripts]
 leading-lambda-collect = "leading_signal_lambda.collector:main"
