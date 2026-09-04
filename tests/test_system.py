@@ -2,6 +2,7 @@ import numpy as np
 import pandas as pd
 
 from leading_signal_lambda import (
+    DailyMarketCollector,
     LeadingLambdaClassifier,
     build_leading_features,
     build_training_set,
@@ -44,3 +45,30 @@ def test_unsorted_input_is_rejected():
     else:
         raise AssertionError("unsorted data must be rejected")
 
+
+def test_collector_maps_symbols_and_excludes_end_date():
+    index = pd.date_range("2024-01-02", periods=4)
+    tickers = ["SPY", "QQQ", "RSP", "SMH", "HYG", "LQD", "XLY", "XLP"]
+    columns = pd.MultiIndex.from_product([["Adj Close", "Volume"], tickers])
+    raw = pd.DataFrame(1.0, index=index, columns=columns)
+
+    def fake_download(**kwargs):
+        assert kwargs["interval"] == "1d"
+        return raw
+
+    collector = DailyMarketCollector(universe={ticker: ticker for ticker in tickers}, downloader=fake_download)
+    result = collector.collect("2024-01-02", "2024-01-05")
+    assert list(result.close.columns) == tickers
+    assert result.close.index.max() == pd.Timestamp("2024-01-04")
+
+
+def test_collector_rejects_missing_required_series():
+    raw = pd.DataFrame({("Adj Close", "SPY"): [100.0]}, index=[pd.Timestamp("2024-01-02")])
+    raw.columns = pd.MultiIndex.from_tuples(raw.columns)
+    collector = DailyMarketCollector(universe={"SPY": "SPY"}, downloader=lambda **kwargs: raw)
+    try:
+        collector.collect("2024-01-01", "2024-01-03")
+    except RuntimeError as error:
+        assert "required daily series" in str(error)
+    else:
+        raise AssertionError("missing required series must be rejected")
