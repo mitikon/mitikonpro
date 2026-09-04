@@ -8,6 +8,7 @@ from leading_signal_lambda import (
     build_training_set,
     walk_forward_validate,
 )
+from leading_signal_lambda.experiment import validate_target
 
 
 def sample_market(rows: int = 420):
@@ -72,3 +73,11 @@ def test_collector_rejects_missing_required_series():
         assert "required daily series" in str(error)
     else:
         raise AssertionError("missing required series must be rejected")
+
+
+def test_validation_report_compares_strategy_and_benchmark(tmp_path):
+    close, volume = sample_market(760)
+    report = validate_target(close, volume, "SPY", tmp_path, train_size=252)
+    assert report.target == "SPY"
+    assert np.isfinite(report.annualized_excess_return)
+    assert (tmp_path / "spy_frozen_predictions.csv").exists()
