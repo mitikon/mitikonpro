@@ -4,8 +4,8 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "leading-signal-lambda"
-version = "0.1.0"
-description = "Regularized PCA classifier for next-session US market signals"
+version = "0.2.0"
+description = "Auditable leading-signal research for markets and horse racing"
 requires-python = ">=3.10"
 dependencies = ["numpy>=1.24", "pandas>=2.0"]
 
