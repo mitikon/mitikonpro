@@ -27,3 +27,14 @@
 ```bash
 python -m pytest
 ```
+
+## 日次確定データの取得
+
+無料取得アダプターを使う場合は任意依存を追加します。
+
+```bash
+pip install '.[data]'
+leading-lambda-collect --start 2010-01-01 --end-exclusive 2026-09-05 --output data/raw
+```
+
+`--end-exclusive`の日付は保存されません。取引時間中の未確定バーを混入させないため、最後に確定した米国営業日の翌日を指定します。出力CSVの欠損値は意図的に残し、未来方向の補完は行いません。
