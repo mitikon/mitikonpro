@@ -3,7 +3,7 @@ from __future__ import annotations
 import argparse
 import json
 from dataclasses import asdict, dataclass
-from datetime import date, timedelta
+from datetime import date
 from pathlib import Path
 
 import numpy as np
@@ -12,6 +12,7 @@ import pandas as pd
 from .collector import DailyMarketCollector
 from .signals import build_leading_features, build_training_set
 from .validation import walk_forward_validate
+from .market_calendar import NYSETradingCalendar
 
 
 @dataclass(frozen=True)
@@ -112,10 +113,17 @@ def run_experiment(start: str, end_exclusive: str, output_dir: str | Path) -> li
 def main() -> None:
     parser = argparse.ArgumentParser(description="Run leakage-safe walk-forward validation")
     parser.add_argument("--start", default="2015-01-01")
-    parser.add_argument("--end-exclusive", default=date.today().isoformat())
+    parser.add_argument("--end-exclusive", default="auto")
     parser.add_argument("--output", default="artifacts/validation")
+    parser.add_argument("--exceptional-closures", default="config/exceptional_nyse_closures.json")
     args = parser.parse_args()
-    reports = run_experiment(args.start, args.end_exclusive, args.output)
+    if args.end_exclusive == "auto":
+        completed = NYSETradingCalendar(exceptional_closures=args.exceptional_closures).last_completed_session()
+        end_exclusive = completed.end_exclusive.isoformat()
+        print(f"last completed XNYS session: {completed.session_date} (close {completed.close_utc})")
+    else:
+        end_exclusive = args.end_exclusive
+    reports = run_experiment(args.start, end_exclusive, args.output)
     for report in reports:
         print(json.dumps(asdict(report), ensure_ascii=False))
 

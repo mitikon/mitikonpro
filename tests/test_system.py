@@ -9,6 +9,7 @@ from leading_signal_lambda import (
     walk_forward_validate,
 )
 from leading_signal_lambda.experiment import validate_target
+from leading_signal_lambda.market_calendar import NYSETradingCalendar
 
 
 def sample_market(rows: int = 420):
@@ -81,3 +82,38 @@ def test_validation_report_compares_strategy_and_benchmark(tmp_path):
     assert report.target == "SPY"
     assert np.isfinite(report.annualized_excess_return)
     assert (tmp_path / "spy_frozen_predictions.csv").exists()
+
+
+class FakeNYSECalendar:
+    def __init__(self):
+        self.sessions = pd.bdate_range("2026-08-31", "2026-09-04", tz="UTC")
+
+    def date_to_session(self, value, direction="none"):
+        stamp = pd.Timestamp(value, tz="UTC")
+        if stamp in self.sessions:
+            return stamp
+        if direction == "previous":
+            return self.sessions[self.sessions <= stamp][-1]
+        raise ValueError("not a session")
+
+    def session_close(self, session):
+        return session + pd.Timedelta(hours=20)
+
+    def previous_session(self, session):
+        return self.sessions[self.sessions.get_loc(session) - 1]
+
+
+def test_calendar_uses_only_completed_session():
+    calendar = NYSETradingCalendar(calendar=FakeNYSECalendar())
+    before_close = calendar.last_completed_session(pd.Timestamp("2026-09-04 19:00", tz="UTC"))
+    after_close = calendar.last_completed_session(pd.Timestamp("2026-09-04 21:00", tz="UTC"))
+    assert before_close.session_date.isoformat() == "2026-09-03"
+    assert after_close.session_date.isoformat() == "2026-09-04"
+
+
+def test_calendar_applies_exceptional_closure(tmp_path):
+    path = tmp_path / "closures.json"
+    path.write_text('["2026-09-04"]', encoding="utf-8")
+    calendar = NYSETradingCalendar(calendar=FakeNYSECalendar(), exceptional_closures=path)
+    completed = calendar.last_completed_session(pd.Timestamp("2026-09-04 21:00", tz="UTC"))
+    assert completed.session_date.isoformat() == "2026-09-03"
