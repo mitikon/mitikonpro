@@ -65,10 +65,26 @@ def validate_target(
                 if column.startswith("ret_")
             }
         ),
+        "excluded_close_symbols": sorted(
+            set(close.columns)
+            - {
+                column.removeprefix("ret_").rsplit("_lag", 1)[0]
+                for column in features.columns
+                if column.startswith("ret_")
+            }
+        ),
         "usable_volume_symbols": sorted(
             column.removeprefix("volume_ratio_")
             for column in features.columns
             if column.startswith("volume_ratio_")
+        ),
+        "excluded_volume_symbols": sorted(
+            set(volume.columns)
+            - {
+                column.removeprefix("volume_ratio_")
+                for column in features.columns
+                if column.startswith("volume_ratio_")
+            }
         ),
         "highest_feature_missing_fraction": {
             column: float(value) for column, value in missing_fraction.head(20).items()
