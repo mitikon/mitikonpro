@@ -68,13 +68,30 @@ def test_optional_close_series_with_no_history_is_ignored():
 
 def test_required_close_series_with_insufficient_history_is_rejected():
     close, volume = sample_market(760)
-    close.loc[close.index[:700], "SPY"] = np.nan
+    close.loc[close.index[:720], "SPY"] = np.nan
     try:
         build_leading_features(close, volume)
     except ValueError as error:
         assert "insufficient close coverage" in str(error)
     else:
         raise AssertionError("required sparse price history must be rejected")
+
+
+def test_stale_optional_close_series_is_ignored():
+    close, volume = sample_market(760)
+    close.loc[close.index[-20:], "VIX9D"] = np.nan
+    features = build_leading_features(close, volume)
+    assert not any("VIX9D" in column for column in features)
+    assert "vix_term_spread" not in features
+
+
+def test_market_holiday_does_not_poison_next_twenty_volume_rows():
+    close, volume = sample_market(120)
+    volume.loc[volume.index[60], "SPY"] = np.nan
+    features = build_leading_features(close, volume)
+    ratio = features["volume_ratio_SPY"]
+    assert pd.isna(ratio.loc[volume.index[60]])
+    assert pd.notna(ratio.loc[volume.index[61]])
 
 
 def test_unsorted_input_is_rejected():
