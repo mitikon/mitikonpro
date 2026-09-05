@@ -1,6 +1,7 @@
 import numpy as np
 import pandas as pd
 import pytest
+import json
 
 from leading_signal_lambda.paper_pca_sub import (
     PAPER_COMPONENTS,
@@ -174,3 +175,7 @@ def test_sector_rotation_experiment_saves_state_and_rankings(tmp_path):
         / "sector_rotation_metrics.json"
     ).exists()
     assert (tmp_path / "rotation" / "market_internals_comparison.json").exists()
+    comparison = json.loads(
+        (tmp_path / "rotation" / "market_internals_comparison.json").read_text()
+    )
+    assert comparison["stage_decision"] in {"REJECT", "RETEST_REQUIRED"}
