@@ -127,6 +127,7 @@ def run_sector_rotation_backtest(
     internal_features: pd.DataFrame | None = None,
     internal_window: int = INTERNAL_WINDOW,
     ridge_alpha: float = RIDGE_ALPHA,
+    minimum_internal_samples: int = 126,
 ) -> SectorRotationBacktestResult:
     """日次確定値のみで翌営業日寄付の売買状態を検証する。"""
     expected = list(SECTOR_ETFS)
@@ -142,7 +143,7 @@ def run_sector_rotation_backtest(
         raise ValueError("not enough observations for sector rotation")
     if prior_sector_returns.index.max() >= sector_returns.index[PAPER_WINDOW + 1]:
         raise ValueError("prior period must end before the first sector signal")
-    if calibration_observations < 2 or max_holding_days < 1:
+    if calibration_observations < 2 or max_holding_days < 1 or minimum_internal_samples < 2:
         raise ValueError("invalid calibration or holding period")
     if min(entry_threshold, take_profit, stop_loss, transaction_cost_bps) < 0:
         raise ValueError("trade thresholds and cost must be non-negative")
@@ -184,7 +185,10 @@ def run_sector_rotation_backtest(
             ].copy()
             y_train.index = x_train.index
             current_internal = aligned_internal.iloc[current]
-            if not x_train.isna().any().any() and not current_internal.isna().any():
+            complete = x_train.notna().all(axis=1) & y_train.notna().all(axis=1)
+            x_train = x_train.loc[complete]
+            y_train = y_train.loc[complete]
+            if len(x_train) >= minimum_internal_samples and not current_internal.isna().any():
                 internal_prediction = MarketInternalRidgeModel(ridge_alpha).fit(
                     x_train, y_train
                 ).predict(current_internal)
