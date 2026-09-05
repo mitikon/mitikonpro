@@ -47,7 +47,9 @@ def build_market_internal_features(
             lambda values: values > 0
         )
         log_volume = np.log(observed)
-        past_baseline = log_volume.shift(1).rolling(20, min_periods=20).mean()
+        past_baseline = (
+            log_volume.dropna().shift(1).rolling(20, min_periods=20).mean().reindex(close.index)
+        )
         shock = (log_volume - past_baseline).rename(f"volume_shock_{symbol}")
         features[shock.name] = shock
         volume_shocks.append(shock)
