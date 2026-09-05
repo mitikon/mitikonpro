@@ -14,6 +14,7 @@ from .sector_rotation import (
     LaggedSectorPcaSubModel,
     make_lagged_sector_pairs,
 )
+from .market_internals import INTERNAL_WINDOW, RIDGE_ALPHA, MarketInternalRidgeModel
 
 BUY = "BUY"
 HOLD = "HOLD"
@@ -123,6 +124,9 @@ def run_sector_rotation_backtest(
     stop_loss: float = 0.05,
     max_holding_days: int = 15,
     transaction_cost_bps: float = 5.0,
+    internal_features: pd.DataFrame | None = None,
+    internal_window: int = INTERNAL_WINDOW,
+    ridge_alpha: float = RIDGE_ALPHA,
 ) -> SectorRotationBacktestResult:
     """日次確定値のみで翌営業日寄付の売買状態を検証する。"""
     expected = list(SECTOR_ETFS)
@@ -153,6 +157,9 @@ def run_sector_rotation_backtest(
     prior_pairs = make_lagged_sector_pairs(prior_sector_returns)
     history_prediction = {symbol: [] for symbol in SECTOR_ETFS}
     history_realized = {symbol: [] for symbol in SECTOR_ETFS}
+    history_base_prediction = {symbol: [] for symbol in SECTOR_ETFS}
+    history_internal_prediction = {symbol: [] for symbol in SECTOR_ETFS}
+    history_internal_realized = {symbol: [] for symbol in SECTOR_ETFS}
     cost_rate = transaction_cost_bps / 10_000.0
 
     position: PositionState | None = None
@@ -168,21 +175,70 @@ def run_sector_rotation_backtest(
         model = LaggedSectorPcaSubModel().fit(rolling_pairs, prior_pairs)
         signal = model.predict(sector_returns.iloc[current])
 
+        internal_prediction: pd.Series | None = None
+        if internal_features is not None and current >= internal_window:
+            aligned_internal = internal_features.reindex(dates)
+            x_train = aligned_internal.iloc[current - internal_window : current]
+            y_train = sector_returns.iloc[
+                current - internal_window + 1 : current + 1
+            ].copy()
+            y_train.index = x_train.index
+            current_internal = aligned_internal.iloc[current]
+            if not x_train.isna().any().any() and not current_internal.isna().any():
+                internal_prediction = MarketInternalRidgeModel(ridge_alpha).fit(
+                    x_train, y_train
+                ).predict(current_internal)
+
         lambdas: dict[str, float] = {}
         effective: dict[str, float] = {}
+        combined_scores: dict[str, float] = {}
+        base_lambdas: dict[str, float] = {}
+        internal_lambdas: dict[str, float] = {}
         for symbol in SECTOR_ETFS:
+            base_score = float(signal.next_standardized_prediction[symbol])
+            base_lambda = _past_correlation(
+                history_base_prediction[symbol],
+                history_realized[symbol],
+                calibration_observations,
+            )
+            internal_lambda = _past_correlation(
+                history_internal_prediction[symbol],
+                history_internal_realized[symbol],
+                calibration_observations,
+            )
+            base_lambdas[symbol] = base_lambda
+            internal_lambdas[symbol] = internal_lambda
+            internal_score = (
+                float(internal_prediction[symbol])
+                if internal_prediction is not None
+                else float("nan")
+            )
+            base_weight = max(base_lambda, 0.0) if np.isfinite(base_lambda) else 0.0
+            internal_weight = (
+                max(internal_lambda, 0.0) if np.isfinite(internal_lambda) else 0.0
+            )
+            if np.isfinite(internal_score) and internal_weight > 0.0:
+                total_weight = base_weight + internal_weight
+                combined = (
+                    (base_weight * base_score + internal_weight * internal_score) / total_weight
+                    if total_weight > 0.0
+                    else base_score
+                )
+            else:
+                combined = base_score
+            combined_scores[symbol] = combined
             value = _past_correlation(
                 history_prediction[symbol],
                 history_realized[symbol],
                 calibration_observations,
             )
             lambdas[symbol] = value
-            raw = float(signal.next_standardized_prediction[symbol])
+            raw = combined
             effective[symbol] = raw * max(value, 0.0) if np.isfinite(value) else 0.0
 
         ranked = sorted(
             SECTOR_ETFS,
-            key=lambda symbol: (effective[symbol], signal.next_standardized_prediction[symbol]),
+            key=lambda symbol: (effective[symbol], combined_scores[symbol]),
             reverse=True,
         )
         top_symbol = ranked[0]
@@ -192,10 +248,18 @@ def run_sector_rotation_backtest(
                     "signal_date": signal_date,
                     "symbol": symbol,
                     "rank": rank,
-                    "raw_score": float(signal.next_standardized_prediction[symbol]),
+                    "raw_score": combined_scores[symbol],
                     "signal_lambda": lambdas[symbol],
                     "effective_score": effective[symbol],
                     "current_distortion": float(signal.current_distortion[symbol]),
+                    "base_score": float(signal.next_standardized_prediction[symbol]),
+                    "base_lambda": base_lambdas[symbol],
+                    "internal_score": (
+                        float(internal_prediction[symbol])
+                        if internal_prediction is not None
+                        else float("nan")
+                    ),
+                    "internal_lambda": internal_lambdas[symbol],
                 }
             )
 
@@ -210,7 +274,7 @@ def run_sector_rotation_backtest(
                 raise RuntimeError("held position is missing its mark price")
             holding_return = next_open / last_mark_price - 1.0
             unrealized = float(closes.loc[signal_date, position.symbol]) / position.entry_price - 1.0
-            held_score = float(signal.next_standardized_prediction[position.symbol])
+            held_score = combined_scores[position.symbol]
             held_lambda = lambdas[position.symbol]
             position = PositionState(
                 position.symbol, position.entry_price, position.entry_date, position.days_held + 1
@@ -219,7 +283,7 @@ def run_sector_rotation_backtest(
         decision = decide_position_action(
             position,
             top_symbol=top_symbol,
-            top_score=float(signal.next_standardized_prediction[top_symbol]),
+            top_score=combined_scores[top_symbol],
             top_lambda=lambdas[top_symbol],
             held_score=held_score,
             held_lambda=held_lambda,
@@ -255,7 +319,7 @@ def run_sector_rotation_backtest(
                 "action": decision.action,
                 "reason": decision.reason,
                 "top_candidate": top_symbol,
-                "top_raw_score": float(signal.next_standardized_prediction[top_symbol]),
+                "top_raw_score": combined_scores[top_symbol],
                 "top_signal_lambda": lambdas[top_symbol],
                 "top_effective_score": effective[top_symbol],
                 "held_before": held_before,
@@ -271,9 +335,17 @@ def run_sector_rotation_backtest(
             target_name = f"next:{symbol}"
             realized_z = (actual_return - model.mean_[target_name]) / model.std_[target_name]
             history_prediction[symbol].append(
-                float(signal.next_standardized_prediction[symbol])
+                combined_scores[symbol]
             )
             history_realized[symbol].append(float(realized_z))
+            history_base_prediction[symbol].append(
+                float(signal.next_standardized_prediction[symbol])
+            )
+            if internal_prediction is not None:
+                history_internal_prediction[symbol].append(
+                    float(internal_prediction[symbol])
+                )
+                history_internal_realized[symbol].append(float(realized_z))
 
     decisions = pd.DataFrame(decision_records).set_index("signal_date")
     rankings = pd.DataFrame(ranking_records).set_index(["signal_date", "symbol"])
