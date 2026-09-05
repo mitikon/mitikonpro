@@ -142,11 +142,19 @@ def test_real_data_experiment_separates_prior_and_evaluation(tmp_path):
 def test_sector_rotation_experiment_saves_state_and_rankings(tmp_path):
     returns = sample_returns(1300, "2019-01-02", 16)
     close = 100.0 * (1.0 + returns).cumprod()
+    close["SMH"] = close["XLK"] * 1.02
+    close["IWM"] = close["SPY"] * 0.98
     open_price = close.shift(1)
     open_price.iloc[0] = close.iloc[0]
+    rng = np.random.default_rng(17)
+    volume = pd.DataFrame(
+        rng.integers(1_000_000, 9_000_000, size=(len(close), len(US_LEADING_SECTORS))),
+        index=close.index,
+        columns=US_LEADING_SECTORS,
+    )
     dataset = MarketDataset(
         close=close,
-        volume=pd.DataFrame(index=close.index),
+        volume=volume,
         open=open_price,
         unadjusted_close=close,
     )
@@ -159,3 +167,10 @@ def test_sector_rotation_experiment_saves_state_and_rankings(tmp_path):
     assert not result.rankings.empty
     assert (tmp_path / "rotation" / "sector_rotation_decisions.csv").exists()
     assert (tmp_path / "rotation" / "sector_rotation_metrics.json").exists()
+    assert (
+        tmp_path
+        / "rotation"
+        / "market_internals_challenger"
+        / "sector_rotation_metrics.json"
+    ).exists()
+    assert (tmp_path / "rotation" / "market_internals_comparison.json").exists()
