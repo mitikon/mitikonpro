@@ -1,5 +1,6 @@
 import numpy as np
 import pandas as pd
+import json
 
 from leading_signal_lambda import (
     DailyMarketCollector,
@@ -36,6 +37,44 @@ def test_pipeline_produces_finite_walk_forward_metrics():
     assert not result.predictions.empty
     assert set(result.predictions["action"]) <= {"LONG", "SHORT", "NO_TRADE"}
     assert all(np.isfinite(value) for value in result.metrics.values())
+
+
+def test_zero_volume_index_series_do_not_remove_all_training_rows():
+    close, volume = sample_market(760)
+    volume.loc[:, ["VIX9D", "VIX3M"]] = 0
+    features = build_leading_features(close, volume)
+    X, _, _ = build_training_set(features, close["SPY"])
+    assert "volume_ratio_VIX9D" not in features
+    assert "volume_ratio_VIX3M" not in features
+    assert len(X) > 504
+
+
+def test_sparse_volume_series_is_ignored_without_future_filling():
+    close, volume = sample_market(760)
+    volume["RATE_INDEX"] = np.nan
+    volume.loc[volume.index[:10], "RATE_INDEX"] = 1.0
+    close["RATE_INDEX"] = 100.0
+    features = build_leading_features(close, volume)
+    assert "volume_ratio_RATE_INDEX" not in features
+
+
+def test_optional_close_series_with_no_history_is_ignored():
+    close, volume = sample_market(760)
+    close["OPTIONAL_BROKEN"] = np.nan
+    volume["OPTIONAL_BROKEN"] = 0
+    features = build_leading_features(close, volume)
+    assert not any("OPTIONAL_BROKEN" in column for column in features)
+
+
+def test_required_close_series_with_insufficient_history_is_rejected():
+    close, volume = sample_market(760)
+    close.loc[close.index[:700], "SPY"] = np.nan
+    try:
+        build_leading_features(close, volume)
+    except ValueError as error:
+        assert "insufficient close coverage" in str(error)
+    else:
+        raise AssertionError("required sparse price history must be rejected")
 
 
 def test_unsorted_input_is_rejected():
@@ -82,6 +121,19 @@ def test_validation_report_compares_strategy_and_benchmark(tmp_path):
     assert report.target == "SPY"
     assert np.isfinite(report.annualized_excess_return)
     assert (tmp_path / "spy_frozen_predictions.csv").exists()
+
+
+def test_validation_writes_diagnostics_before_insufficient_rows_error(tmp_path):
+    close, volume = sample_market(420)
+    try:
+        validate_target(close, volume, "SPY", tmp_path, train_size=504)
+    except ValueError as error:
+        assert "valid training rows" in str(error)
+    else:
+        raise AssertionError("insufficient real-data rows must be rejected")
+    diagnostics = json.loads((tmp_path / "spy_data_diagnostics.json").read_text(encoding="utf-8"))
+    assert diagnostics["raw_rows"] == 420
+    assert diagnostics["training_rows"] <= 504
 
 
 class FakeNYSECalendar:
