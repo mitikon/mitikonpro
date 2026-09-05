@@ -45,6 +45,6 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: leading-lambda-validation-${{ github.run_number }}
-          path: artifacts/validation
+          path: artifacts
           if-no-files-found: error
           retention-days: 90
