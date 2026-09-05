@@ -48,6 +48,15 @@ def test_future_volume_mutation_does_not_change_past_features():
     pd.testing.assert_frame_equal(first.iloc[:-5], second.iloc[:-5])
 
 
+def test_market_holiday_does_not_poison_next_twenty_volume_signals():
+    _, close, volume = sample_market(80)
+    holiday = volume.index[40]
+    volume.loc[holiday] = np.nan
+    features = build_market_internal_features(close, volume)
+    assert features.loc[holiday].filter(like="volume_shock_").isna().all()
+    assert features.iloc[41].filter(like="volume_shock_").notna().all()
+
+
 def test_ridge_model_predicts_all_sector_scores():
     rng = np.random.default_rng(32)
     features = pd.DataFrame(rng.normal(size=(252, 6)))
