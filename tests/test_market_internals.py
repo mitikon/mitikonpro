@@ -80,6 +80,7 @@ def test_challenger_records_base_and_internal_predictions_without_future_leakage
         internal_features=internal,
         calibration_observations=10,
         internal_window=60,
+        minimum_internal_samples=30,
     )
     changed_internal = internal.copy()
     changed_internal.iloc[-5:] *= 100.0
@@ -91,6 +92,7 @@ def test_challenger_records_base_and_internal_predictions_without_future_leakage
         internal_features=changed_internal,
         calibration_observations=10,
         internal_window=60,
+        minimum_internal_samples=30,
     )
     cutoff = sector_returns.index[-6]
     columns = [
@@ -104,3 +106,29 @@ def test_challenger_records_base_and_internal_predictions_without_future_leakage
     pd.testing.assert_frame_equal(
         first.rankings.loc[:cutoff, columns], second.rankings.loc[:cutoff, columns]
     )
+    assert first.rankings["internal_score"].notna().any()
+
+
+def test_challenger_drops_sparse_past_rows_without_backfilling():
+    returns_all, close, volume = sample_market(430, 35)
+    sector_returns = returns_all.loc[:, list(SECTOR_ETFS)]
+    prior = pd.DataFrame(
+        np.random.default_rng(36).normal(0.0, 0.01, size=(500, len(SECTOR_ETFS))),
+        index=pd.bdate_range("2019-01-02", periods=500),
+        columns=SECTOR_ETFS,
+    )
+    open_price = close.loc[:, list(SECTOR_ETFS)].shift(1)
+    open_price.iloc[0] = close.loc[:, list(SECTOR_ETFS)].iloc[0]
+    internal = build_market_internal_features(close, volume)
+    internal.iloc[30::25] = np.nan
+    result = run_sector_rotation_backtest(
+        sector_returns,
+        prior,
+        open_price,
+        close.loc[:, list(SECTOR_ETFS)],
+        internal_features=internal,
+        calibration_observations=10,
+        internal_window=60,
+        minimum_internal_samples=30,
+    )
+    assert result.rankings["internal_score"].notna().any()
