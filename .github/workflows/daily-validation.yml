@@ -11,6 +11,7 @@ on:
     branches: [main]
     paths:
       - "src/leading_signal_lambda/**"
+      - "src/racing_lambda/**"
       - "tests/**"
       - "pyproject.toml"
       - ".github/workflows/daily-validation.yml"
