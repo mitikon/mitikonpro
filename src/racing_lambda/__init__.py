@@ -2,6 +2,16 @@
 
 from .evaluation import EvaluationReport, evaluate_prediction
 from .freeze import freeze_prediction, load_frozen_prediction
+from .layer2_live_input import (
+    MonthlyConditionStats,
+    PastRun,
+    RaceDayHorseInput,
+    body_weight_fit,
+    build_statistical_inputs,
+    normalized_market_probabilities,
+    pace_position_score,
+    recent_form_score,
+)
 from .odds import OddsDistortion, rank_odds_distortion
 from .schema import (
     ComponentWeights,
@@ -18,13 +28,21 @@ __all__ = [
     "EvaluationReport",
     "HorseEntry",
     "LeadingSignalPolicy",
+    "MonthlyConditionStats",
     "OddsDistortion",
     "OfficialResult",
+    "PastRun",
     "PredictionRow",
     "RaceContext",
+    "RaceDayHorseInput",
+    "body_weight_fit",
     "build_prediction",
+    "build_statistical_inputs",
     "evaluate_prediction",
     "freeze_prediction",
     "load_frozen_prediction",
+    "normalized_market_probabilities",
+    "pace_position_score",
     "rank_odds_distortion",
+    "recent_form_score",
 ]
