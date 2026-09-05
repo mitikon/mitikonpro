@@ -17,6 +17,7 @@ from .sector_rotation_validation import (
     SectorRotationBacktestResult,
     run_sector_rotation_backtest,
 )
+from .market_internals import build_market_internal_features
 
 
 def validate_us_market_dataset(
@@ -94,7 +95,7 @@ def validate_sector_rotation_dataset(
     opens = dataset.open.reindex(evaluation.index).loc[:, list(SECTOR_ETFS)]
     closes = dataset.unadjusted_close.reindex(evaluation.index).loc[:, list(SECTOR_ETFS)]
     benchmark = all_returns.loc[evaluation.index, "SPY"]
-    result = run_sector_rotation_backtest(
+    champion = run_sector_rotation_backtest(
         evaluation,
         prior,
         opens,
@@ -102,7 +103,17 @@ def validate_sector_rotation_dataset(
         benchmark_returns=benchmark,
     )
     output = Path(output_dir)
-    result.save_frozen(output)
+    champion.save_frozen(output)
+    internal_features = build_market_internal_features(dataset.close, dataset.volume)
+    challenger = run_sector_rotation_backtest(
+        evaluation,
+        prior,
+        opens,
+        closes,
+        benchmark_returns=benchmark,
+        internal_features=internal_features,
+    )
+    challenger.save_frozen(output / "market_internals_challenger")
     diagnostics = {
         "prior_first_date": str(prior.index.min().date()),
         "prior_last_date": str(prior.index.max().date()),
@@ -121,7 +132,15 @@ def validate_sector_rotation_dataset(
     (output / "sector_rotation_diagnostics.json").write_text(
         json.dumps(diagnostics, indent=2), encoding="utf-8"
     )
-    return result
+    (output / "market_internals_comparison.json").write_text(
+        json.dumps(
+            {"champion": champion.metrics, "challenger": challenger.metrics},
+            indent=2,
+            allow_nan=False,
+        ),
+        encoding="utf-8",
+    )
+    return challenger
 
 
 def main() -> None:
