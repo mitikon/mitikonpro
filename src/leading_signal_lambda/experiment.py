@@ -51,6 +51,56 @@ def validate_target(
 ) -> TargetReport:
     features = build_leading_features(close, volume)
     X, y, next_returns = build_training_set(features, close[target])
+    missing_fraction = features.isna().mean().sort_values(ascending=False)
+    diagnostics = {
+        "target": target,
+        "raw_rows": len(close),
+        "feature_rows": len(features),
+        "training_rows": len(X),
+        "minimum_training_rows_required": train_size + 1,
+        "usable_close_symbols": sorted(
+            {
+                column.removeprefix("ret_").rsplit("_lag", 1)[0]
+                for column in features.columns
+                if column.startswith("ret_")
+            }
+        ),
+        "excluded_close_symbols": sorted(
+            set(close.columns)
+            - {
+                column.removeprefix("ret_").rsplit("_lag", 1)[0]
+                for column in features.columns
+                if column.startswith("ret_")
+            }
+        ),
+        "usable_volume_symbols": sorted(
+            column.removeprefix("volume_ratio_")
+            for column in features.columns
+            if column.startswith("volume_ratio_")
+        ),
+        "excluded_volume_symbols": sorted(
+            set(volume.columns)
+            - {
+                column.removeprefix("volume_ratio_")
+                for column in features.columns
+                if column.startswith("volume_ratio_")
+            }
+        ),
+        "highest_feature_missing_fraction": {
+            column: float(value) for column, value in missing_fraction.head(20).items()
+        },
+    }
+    diagnostics_path = output / f"{target.lower()}_data_diagnostics.json"
+    diagnostics_path.write_text(json.dumps(diagnostics, indent=2), encoding="utf-8")
+    print(
+        f"{target} data rows: raw={len(close)}, features={len(features)}, "
+        f"training={len(X)}, required>{train_size}"
+    )
+    if len(X) <= train_size:
+        raise ValueError(
+            f"{target}: only {len(X)} valid training rows remain from {len(close)} raw rows; "
+            f"at least {train_size + 1} are required. See {diagnostics_path}."
+        )
     result = walk_forward_validate(
         X,
         y,
