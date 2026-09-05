@@ -31,6 +31,10 @@ DEFAULT_UNIVERSE: dict[str, str] = {
 class MarketDataset:
     close: pd.DataFrame
     volume: pd.DataFrame
+    open: pd.DataFrame | None = None
+    high: pd.DataFrame | None = None
+    low: pd.DataFrame | None = None
+    unadjusted_close: pd.DataFrame | None = None
 
     def save_csv(self, directory: str | Path) -> tuple[Path, Path]:
         destination = Path(directory)
@@ -39,6 +43,14 @@ class MarketDataset:
         volume_path = destination / "daily_volume.csv"
         self.close.to_csv(close_path, index_label="date")
         self.volume.to_csv(volume_path, index_label="date")
+        for name, frame in (
+            ("daily_open.csv", self.open),
+            ("daily_high.csv", self.high),
+            ("daily_low.csv", self.low),
+            ("daily_unadjusted_close.csv", self.unadjusted_close),
+        ):
+            if frame is not None:
+                frame.to_csv(destination / name, index_label="date")
         return close_path, volume_path
 
 
@@ -72,14 +84,29 @@ class DailyMarketCollector:
             raise RuntimeError("daily data provider returned no rows")
         close = self._extract(raw, "Adj Close", fallback="Close")
         volume = self._extract(raw, "Volume", allow_missing=True)
+        open_price = self._extract(raw, "Open", allow_missing=True)
+        high = self._extract(raw, "High", allow_missing=True)
+        low = self._extract(raw, "Low", allow_missing=True)
+        unadjusted_close = self._extract(raw, "Close", allow_missing=True)
         close = self._rename_and_bound(close, end_ts)
         volume = self._rename_and_bound(volume, end_ts).reindex(close.index)
+        open_price = self._rename_and_bound(open_price, end_ts).reindex(close.index)
+        high = self._rename_and_bound(high, end_ts).reindex(close.index)
+        low = self._rename_and_bound(low, end_ts).reindex(close.index)
+        unadjusted_close = self._rename_and_bound(unadjusted_close, end_ts).reindex(close.index)
         required = {"SPY", "QQQ", "RSP", "SMH", "HYG", "LQD", "XLY", "XLP"}
         missing = sorted(symbol for symbol in required if symbol not in close or close[symbol].dropna().empty)
         if missing:
             raise RuntimeError(f"required daily series missing: {missing}")
         # 欠損は可視化したまま保存する。将来値によるbackfillはしない。
-        return MarketDataset(close.sort_index(), volume.sort_index())
+        return MarketDataset(
+            close.sort_index(),
+            volume.sort_index(),
+            open_price.sort_index(),
+            high.sort_index(),
+            low.sort_index(),
+            unadjusted_close.sort_index(),
+        )
 
     def _rename_and_bound(self, frame: pd.DataFrame, end_ts: pd.Timestamp) -> pd.DataFrame:
         reverse = {ticker: name for name, ticker in self.universe.items()}
