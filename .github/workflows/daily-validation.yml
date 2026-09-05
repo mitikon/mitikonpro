@@ -38,6 +38,8 @@ jobs:
         env:
           START_DATE: ${{ inputs.start_date || '2015-01-01' }}
         run: leading-lambda-validate --start "$START_DATE" --output artifacts/validation
+      - name: Run paper-based US-market PCA SUB validation
+        run: leading-lambda-us-validate --output artifacts/us_pca_sub_validation
       - name: Upload immutable validation result
         if: always()
         uses: actions/upload-artifact@v4
