@@ -15,6 +15,7 @@ from .sector_rotation_validation import (
     decide_position_action,
     run_sector_rotation_backtest,
 )
+from .market_internals import MarketInternalRidgeModel, build_market_internal_features
 
 __all__ = [
     "LeadingLambdaClassifier",
@@ -41,4 +42,6 @@ __all__ = [
     "SectorRotationBacktestResult",
     "decide_position_action",
     "run_sector_rotation_backtest",
+    "MarketInternalRidgeModel",
+    "build_market_internal_features",
 ]
