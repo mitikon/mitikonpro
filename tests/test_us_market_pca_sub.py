@@ -18,7 +18,10 @@ from leading_signal_lambda.us_market_pca_sub import (
 )
 from leading_signal_lambda.us_market_validation import run_us_market_backtest
 from leading_signal_lambda.collector import MarketDataset
-from leading_signal_lambda.us_market_experiment import validate_us_market_dataset
+from leading_signal_lambda.us_market_experiment import (
+    validate_sector_rotation_dataset,
+    validate_us_market_dataset,
+)
 
 
 def sample_returns(rows: int, start: str, seed: int) -> pd.DataFrame:
@@ -134,3 +137,25 @@ def test_real_data_experiment_separates_prior_and_evaluation(tmp_path):
     assert set(result.metrics) == set(US_MARKET_TARGETS)
     assert (tmp_path / "us_pca_sub_frozen_predictions.csv").exists()
     assert (tmp_path / "us_pca_sub_validation_summary.json").exists()
+
+
+def test_sector_rotation_experiment_saves_state_and_rankings(tmp_path):
+    returns = sample_returns(1300, "2019-01-02", 16)
+    close = 100.0 * (1.0 + returns).cumprod()
+    open_price = close.shift(1)
+    open_price.iloc[0] = close.iloc[0]
+    dataset = MarketDataset(
+        close=close,
+        volume=pd.DataFrame(index=close.index),
+        open=open_price,
+        unadjusted_close=close,
+    )
+    result = validate_sector_rotation_dataset(
+        dataset,
+        tmp_path / "rotation",
+        prior_end="2021-12-31",
+        evaluation_start="2022-01-01",
+    )
+    assert not result.rankings.empty
+    assert (tmp_path / "rotation" / "sector_rotation_decisions.csv").exists()
+    assert (tmp_path / "rotation" / "sector_rotation_metrics.json").exists()
