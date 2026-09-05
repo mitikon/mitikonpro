@@ -7,6 +7,13 @@ on:
         description: "Historical start date"
         required: true
         default: "2015-01-01"
+  pull_request:
+    branches: [main]
+    paths:
+      - "src/leading_signal_lambda/**"
+      - "tests/**"
+      - "pyproject.toml"
+      - ".github/workflows/daily-validation.yml"
   schedule:
     - cron: "15 2 * * 2-6"
 
@@ -32,6 +39,7 @@ jobs:
           START_DATE: ${{ inputs.start_date || '2015-01-01' }}
         run: leading-lambda-validate --start "$START_DATE" --output artifacts/validation
       - name: Upload immutable validation result
+        if: always()
         uses: actions/upload-artifact@v4
         with:
           name: leading-lambda-validation-${{ github.run_number }}
