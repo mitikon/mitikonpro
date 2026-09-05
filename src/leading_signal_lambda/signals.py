@@ -5,8 +5,17 @@ import pandas as pd
 
 
 REQUIRED_SYMBOLS = ("SPY", "QQQ", "RSP", "SMH", "HYG", "LQD", "XLY", "XLP")
-MIN_CLOSE_COVERAGE = 0.80
-MIN_VOLUME_COVERAGE = 0.80
+MIN_SERIES_OBSERVATIONS = 60
+MAX_SERIES_STALENESS_ROWS = 5
+
+
+def _has_usable_history(series: pd.Series, *, positive_only: bool = False) -> bool:
+    numeric = pd.to_numeric(series, errors="coerce")
+    valid = numeric.gt(0) if positive_only else numeric.notna()
+    positions = np.flatnonzero(valid.to_numpy())
+    if len(positions) < MIN_SERIES_OBSERVATIONS:
+        return False
+    return len(series) - 1 - int(positions[-1]) <= MAX_SERIES_STALENESS_ROWS
 
 
 def build_leading_features(close: pd.DataFrame, volume: pd.DataFrame | None = None) -> pd.DataFrame:
@@ -20,13 +29,14 @@ def build_leading_features(close: pd.DataFrame, volume: pd.DataFrame | None = No
     if missing:
         raise ValueError(f"missing required symbols: {sorted(missing)}")
     numeric_close = close.apply(pd.to_numeric, errors="coerce")
-    close_coverage = numeric_close.notna().mean()
     unusable_required = sorted(
-        symbol for symbol in REQUIRED_SYMBOLS if close_coverage.get(symbol, 0.0) < MIN_CLOSE_COVERAGE
+        symbol for symbol in REQUIRED_SYMBOLS if not _has_usable_history(numeric_close[symbol])
     )
     if unusable_required:
         raise ValueError(f"required symbols have insufficient close coverage: {unusable_required}")
-    usable_close = sorted(close_coverage[close_coverage >= MIN_CLOSE_COVERAGE].index)
+    usable_close = sorted(
+        symbol for symbol in numeric_close.columns if _has_usable_history(numeric_close[symbol])
+    )
     numeric_close = numeric_close[usable_close]
     returns = numeric_close.pct_change(fill_method=None)
     features: dict[str, pd.Series] = {}
@@ -48,10 +58,11 @@ def build_leading_features(close: pd.DataFrame, volume: pd.DataFrame | None = No
             # Treat those as "volume unavailable", not as a numeric signal.  A single
             # unusable series must never invalidate every row in the training set.
             observed = pd.to_numeric(aligned[symbol], errors="coerce").where(lambda value: value > 0)
-            coverage = float(observed.notna().mean())
-            if coverage < MIN_VOLUME_COVERAGE:
+            if not _has_usable_history(observed, positive_only=True):
                 continue
-            baseline = observed.rolling(20, min_periods=20).mean()
+            # Compute the rolling baseline on that market's own observed sessions.
+            # Otherwise one cross-market holiday poisons the following 20 rows.
+            baseline = observed.dropna().rolling(20, min_periods=20).mean().reindex(close.index)
             features[f"volume_ratio_{symbol}"] = observed / baseline - 1.0
     return pd.DataFrame(features, index=close.index).replace([np.inf, -np.inf], np.nan)
 
