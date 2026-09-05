@@ -132,9 +132,22 @@ def validate_sector_rotation_dataset(
     (output / "sector_rotation_diagnostics.json").write_text(
         json.dumps(diagnostics, indent=2), encoding="utf-8"
     )
+    improves_return = (
+        challenger.metrics["annualized_return"] > champion.metrics["annualized_return"]
+    )
+    improves_drawdown = (
+        challenger.metrics["maximum_drawdown"] > champion.metrics["maximum_drawdown"]
+    )
+    stage_decision = "RETEST_REQUIRED" if improves_return and improves_drawdown else "REJECT"
     (output / "market_internals_comparison.json").write_text(
         json.dumps(
-            {"champion": champion.metrics, "challenger": challenger.metrics},
+            {
+                "stage_decision": stage_decision,
+                "improves_return": improves_return,
+                "improves_drawdown": improves_drawdown,
+                "champion": champion.metrics,
+                "challenger": challenger.metrics,
+            },
             indent=2,
             allow_nan=False,
         ),
