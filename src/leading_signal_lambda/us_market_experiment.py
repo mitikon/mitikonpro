@@ -12,6 +12,11 @@ from .collector import DailyMarketCollector, MarketDataset
 from .market_calendar import NYSETradingCalendar
 from .us_market_pca_sub import prepare_us_market_returns
 from .us_market_validation import USMarketBacktestResult, run_us_market_backtest
+from .sector_rotation import SECTOR_ETFS
+from .sector_rotation_validation import (
+    SectorRotationBacktestResult,
+    run_sector_rotation_backtest,
+)
 
 
 def validate_us_market_dataset(
@@ -69,6 +74,56 @@ def validate_us_market_dataset(
     return result
 
 
+def validate_sector_rotation_dataset(
+    dataset: MarketDataset,
+    output_dir: str | Path,
+    *,
+    prior_end: str = "2021-12-31",
+    evaluation_start: str = "2022-01-01",
+) -> SectorRotationBacktestResult:
+    """11セクター最大歪みと売買状態を実データで検証する。"""
+    if dataset.open is None or dataset.unadjusted_close is None:
+        raise ValueError("sector rotation requires daily open and unadjusted close prices")
+    all_returns = prepare_us_market_returns(dataset.close)
+    prior_end_ts = pd.Timestamp(prior_end)
+    evaluation_start_ts = pd.Timestamp(evaluation_start)
+    prior = all_returns.loc[all_returns.index <= prior_end_ts, list(SECTOR_ETFS)]
+    evaluation = all_returns.loc[
+        all_returns.index >= evaluation_start_ts, list(SECTOR_ETFS)
+    ]
+    opens = dataset.open.reindex(evaluation.index).loc[:, list(SECTOR_ETFS)]
+    closes = dataset.unadjusted_close.reindex(evaluation.index).loc[:, list(SECTOR_ETFS)]
+    benchmark = all_returns.loc[evaluation.index, "SPY"]
+    result = run_sector_rotation_backtest(
+        evaluation,
+        prior,
+        opens,
+        closes,
+        benchmark_returns=benchmark,
+    )
+    output = Path(output_dir)
+    result.save_frozen(output)
+    diagnostics = {
+        "prior_first_date": str(prior.index.min().date()),
+        "prior_last_date": str(prior.index.max().date()),
+        "prior_rows": len(prior),
+        "evaluation_first_date": str(evaluation.index.min().date()),
+        "evaluation_last_date": str(evaluation.index.max().date()),
+        "evaluation_rows": len(evaluation),
+        "targets": list(SECTOR_ETFS),
+        "position_limit": 1,
+        "entry_threshold": 0.25,
+        "take_profit": 0.10,
+        "stop_loss": 0.05,
+        "max_holding_days": 15,
+        "transaction_cost_bps": 5.0,
+    }
+    (output / "sector_rotation_diagnostics.json").write_text(
+        json.dumps(diagnostics, indent=2), encoding="utf-8"
+    )
+    return result
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(
         description="Validate the US-market paper PCA SUB leading signal"
@@ -98,7 +153,18 @@ def main() -> None:
         prior_end=args.prior_end,
         evaluation_start=args.evaluation_start,
     )
-    print(json.dumps(result.metrics, ensure_ascii=False))
+    rotation = validate_sector_rotation_dataset(
+        dataset,
+        Path(args.output) / "sector_rotation",
+        prior_end=args.prior_end,
+        evaluation_start=args.evaluation_start,
+    )
+    print(
+        json.dumps(
+            {"spy_qqq_baseline": result.metrics, "sector_rotation": rotation.metrics},
+            ensure_ascii=False,
+        )
+    )
 
 
 if __name__ == "__main__":
