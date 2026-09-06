@@ -10,8 +10,8 @@ def test_inventory_preserves_missing_data_instead_of_backfilling():
     assert targets["2026-07-19-hakodate-2yo"].frozen_marks == ()
 
 
-def test_next_external_target_is_ibis_summer_dash():
+def test_next_external_target_is_queen_stakes():
     target = next_external_validation_target()
-    assert target.race_id == "2026-08-02-niigata-07"
-    assert target.official_top5 == ("6", "11", "4", "17", "16")
-    assert target.feature_recovery == "recoverable_from_uploaded_racecards"
+    assert target.race_id == "2026-08-02-sapporo-11"
+    assert target.official_top5 == ("7", "11", "14", "9", "3")
+    assert target.feature_recovery == "medium_to_high_from_file_library"
