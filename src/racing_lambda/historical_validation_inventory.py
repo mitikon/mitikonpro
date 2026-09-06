@@ -61,11 +61,26 @@ HISTORICAL_VALIDATION_TARGETS: tuple[ValidationTarget, ...] = (
         ),
     ),
     ValidationTarget(
+        race_id="2026-08-02-sapporo-11",
+        race_name="クイーンステークス G3",
+        date="2026-08-02",
+        venue="札幌",
+        status="next_recovery_target",
+        frozen_marks=("9", "11", "7", "10", "2"),
+        official_top5=("7", "11", "14", "9", "3"),
+        feature_recovery="medium_to_high_from_file_library",
+        note=(
+            "発走前JRA-VAN系出馬表・統計画像がFile Libraryに残存。"
+            "固定印はエリカエクスプレス→コガネノソラ→ココナッツブラウン→フェスティバルヒル→ケリフレッドアスク。"
+            "旧予想Top5集合は正式Top5と3/5一致。性能詳細λ・コース適性λの同一規則で外部検証する。"
+        ),
+    ),
+    ValidationTarget(
         race_id="2026-07-19-kokura-kinen",
         race_name="小倉記念 G3",
         date="2026-07-19",
         venue="小倉",
-        status="next_recovery_target",
+        status="history_confirmed_needs_feature_recovery",
         frozen_marks=("14", "18", "1", "16", "6"),
         official_top5=("1", "17", "18", "6", "3"),
         feature_recovery="low_to_medium",
