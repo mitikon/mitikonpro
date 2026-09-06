@@ -1,7 +1,7 @@
 """Inventory of historical races available for leakage-safe validation.
 
 Only races with evidence that a prediction existed before the official result are
-listed. Completeness is explicit; missing pre-race marks/features are never
+listed.  Completeness is explicit; missing pre-race marks/features are never
 invented from the result.
 """
 from __future__ import annotations
@@ -50,14 +50,14 @@ HISTORICAL_VALIDATION_TARGETS: tuple[ValidationTarget, ...] = (
         race_name="アイビスサマーダッシュ G3",
         date="2026-08-02",
         venue="新潟",
-        status="external_bridge_failed_needs_course_fit",
+        status="course_specialization_complete_base_score_recovery_needed",
         frozen_marks=("8", "6", "10", "13"),
         official_top5=("6", "11", "4", "17", "16"),
-        feature_recovery="high_for_last5_clocks_medium_for_jockey_trainer",
+        feature_recovery="course_complete_base_continuous_score_missing",
         note=(
-            "全17頭の発走前出馬表・単勝・過去5走時計/上がりを復元。"
-            "中京で最良だった位置取り中立化+market gap除去+performance detailを移植した橋渡し検証はTop5 2/5。"
-            "騎手/調教師の当時集計は未復元のため0.5中立。直線1000m固有のコース距離適合を独立因子として扱う必要性を検出。"
+            "全17頭の発走前JRA芝1000m成績を復元し、コース固有適性λは完全カバレッジ。"
+            "元の外部bridgeは連続スコアを保存せず順位だけ保存したため、総合再融合では順位を偽の距離へ変換せず、"
+            "連続base scoreの再構築を先に行う。"
         ),
     ),
     ValidationTarget(
