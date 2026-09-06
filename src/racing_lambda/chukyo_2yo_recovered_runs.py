@@ -2,8 +2,7 @@
 
 Only information independently recoverable from pre-race/public race records is
 stored here.  The official 2026-08-30 Chukyo 2yo Stakes result is never used as
-an input feature.  Horse 3 remains intentionally unresolved until its two prior
-runs are recovered with field size and passing positions.
+an input feature.
 """
 
 from __future__ import annotations
@@ -38,9 +37,9 @@ class RecoveredRun:
         )
 
 
-# Sources used to recover these fields include the archived pre-race netkeiba
-# 5/9-run racecard plus JRA/JBIS race records.  Values below describe races
-# BEFORE the target 2026-08-30 event.
+# Sources used to recover these fields include archived pre-race racecards plus
+# JRA/JBIS/public race records.  Every value describes a race BEFORE the target
+# 2026-08-30 event.
 CHUKYO_2YO_RECOVERED_RUNS: dict[str, tuple[RecoveredRun, ...]] = {
     "1": (
         RecoveredRun("2026-08-15", "芝", 1200, "良", 7, 7, 5, 5, 36.2, 472),
@@ -50,9 +49,10 @@ CHUKYO_2YO_RECOVERED_RUNS: dict[str, tuple[RecoveredRun, ...]] = {
         RecoveredRun("2026-07-11", "芝", 1200, "良", 2, 12, 1, 1, 36.1, 468),
         RecoveredRun("2026-06-21", "芝", 1600, "稍重", 6, 9, 2, 2, 35.2, 474),
     ),
-    # Horse 3 (サタンジェロ): two prior runs are known at summary level, but
-    # field sizes and passing positions have not yet been independently
-    # recovered.  Do not fabricate them.
+    "3": (
+        RecoveredRun("2026-07-26", "芝", 1400, "良", 1, 9, 8, 8, 33.7, 460),
+        RecoveredRun("2026-06-20", "芝", 1400, "稍重", 6, 9, 5, 3, 36.7, 450),
+    ),
     "4": (
         RecoveredRun("2026-06-27", "芝", 1200, "重", 1, 6, 1, 1, 34.0, 454),
         RecoveredRun("2026-06-07", "芝", 1400, "稍重", 2, 11, 3, 3, 35.0, 460),
