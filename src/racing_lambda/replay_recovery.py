@@ -9,6 +9,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+from .chukyo_2yo_recovered_runs import recovered_horse_ids
 from .historical_evidence_2026 import CHUKYO_2YO_PAST_RUNS
 
 
@@ -24,19 +25,23 @@ class RaceRecoveryPlan:
     ready_for_full_layer2: bool
     gaps: tuple[HorseRecoveryGap, ...]
     race_level_missing: tuple[str, ...]
+    recovered_horses: tuple[str, ...] = ()
+    unresolved_horses: tuple[str, ...] = ()
 
 
 def chukyo_2yo_recovery_plan() -> RaceRecoveryPlan:
+    recovered = set(recovered_horse_ids())
     gaps: list[HorseRecoveryGap] = []
-    for horse_id, runs in sorted(CHUKYO_2YO_PAST_RUNS.items(), key=lambda item: int(item[0])):
+    unresolved: list[str] = []
+
+    for horse_id, _runs in sorted(CHUKYO_2YO_PAST_RUNS.items(), key=lambda item: int(item[0])):
         missing: set[str] = set()
-        for run in runs:
-            # layer2_live_input.PastRun requires field size in order to normalize
-            # finish and positions.  Project history preserved finishes but not
-            # the field sizes for these races.
+        if horse_id not in recovered:
+            # A current layer-2 PastRun needs both field size and passing
+            # positions.  These are still unresolved only for horse 3.
             missing.add("past_run_field_size")
-            # Passing positions are required for a faithful pace/position score.
             missing.add("passing_positions")
+            unresolved.append(horse_id)
         gaps.append(HorseRecoveryGap(horse_id=horse_id, missing=tuple(sorted(missing))))
 
     race_level_missing = (
@@ -50,4 +55,6 @@ def chukyo_2yo_recovery_plan() -> RaceRecoveryPlan:
         ready_for_full_layer2=ready,
         gaps=tuple(gaps),
         race_level_missing=race_level_missing,
+        recovered_horses=tuple(sorted(recovered, key=int)),
+        unresolved_horses=tuple(sorted(unresolved, key=int)),
     )
