@@ -1,7 +1,7 @@
 """Inventory of historical races available for leakage-safe validation.
 
 Only races with evidence that a prediction existed before the official result are
-listed.  Completeness is explicit; missing pre-race marks/features are never
+listed. Completeness is explicit; missing pre-race marks/features are never
 invented from the result.
 """
 from __future__ import annotations
@@ -50,13 +50,14 @@ HISTORICAL_VALIDATION_TARGETS: tuple[ValidationTarget, ...] = (
         race_name="アイビスサマーダッシュ G3",
         date="2026-08-02",
         venue="新潟",
-        status="next_recovery_target",
+        status="external_bridge_failed_needs_course_fit",
         frozen_marks=("8", "6", "10", "13"),
         official_top5=("6", "11", "4", "17", "16"),
-        feature_recovery="recoverable_from_uploaded_racecards",
+        feature_recovery="high_for_last5_clocks_medium_for_jockey_trainer",
         note=(
-            "発走前公開投稿でシュラフ・ピューロマジック・エコロレジーナ・テイエムスパーダを確認。"
-            "公開画像で確認できない追加印は捏造せず4頭のみ固定。アップロード済みJRA-VAN画像から全馬事前特徴を復元する。"
+            "全17頭の発走前出馬表・単勝・過去5走時計/上がりを復元。"
+            "中京で最良だった位置取り中立化+market gap除去+performance detailを移植した橋渡し検証はTop5 2/5。"
+            "騎手/調教師の当時集計は未復元のため0.5中立。直線1000m固有のコース距離適合を独立因子として扱う必要性を検出。"
         ),
     ),
     ValidationTarget(
@@ -64,7 +65,7 @@ HISTORICAL_VALIDATION_TARGETS: tuple[ValidationTarget, ...] = (
         race_name="小倉記念 G3",
         date="2026-07-19",
         venue="小倉",
-        status="history_confirmed_needs_feature_recovery",
+        status="next_recovery_target",
         frozen_marks=("14", "18", "1", "16", "6"),
         official_top5=("1", "17", "18", "6", "3"),
         feature_recovery="low_to_medium",
