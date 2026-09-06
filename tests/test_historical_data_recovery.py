@@ -21,11 +21,14 @@ def test_recovery_summary_never_claims_result_backfill():
     assert summary["chukyo_monthly_condition_db_available"] is False
 
 
-def test_chukyo_full_layer2_replay_remains_blocked_until_missing_inputs_are_recovered():
+def test_chukyo_full_layer2_replay_is_blocked_only_by_monthly_snapshot_inputs():
     plan = chukyo_2yo_recovery_plan()
+    expected = tuple(str(number) for number in range(1, 10))
+
     assert plan.ready_for_full_layer2 is False
     assert "monthly_course_distance_surface_stats" in plan.race_level_missing
     assert len(plan.gaps) == 9
+    assert plan.recovered_horses == expected
+    assert plan.unresolved_horses == ()
     for gap in plan.gaps:
-        assert "past_run_field_size" in gap.missing
-        assert "passing_positions" in gap.missing
+        assert gap.missing == ()
