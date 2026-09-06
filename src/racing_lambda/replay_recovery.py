@@ -37,13 +37,14 @@ def chukyo_2yo_recovery_plan() -> RaceRecoveryPlan:
     for horse_id, _runs in sorted(CHUKYO_2YO_PAST_RUNS.items(), key=lambda item: int(item[0])):
         missing: set[str] = set()
         if horse_id not in recovered:
-            # A current layer-2 PastRun needs both field size and passing
-            # positions.  These are still unresolved only for horse 3.
             missing.add("past_run_field_size")
             missing.add("passing_positions")
             unresolved.append(horse_id)
         gaps.append(HorseRecoveryGap(horse_id=horse_id, missing=tuple(sorted(missing))))
 
+    # Horse-level historical race details are now recovered for all nine
+    # runners.  What remains is the race-level monthly statistical database
+    # required by the current layer-2 architecture.
     race_level_missing = (
         "monthly_course_distance_surface_stats",
         "monthly_going_weather_season_stats",
