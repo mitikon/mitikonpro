@@ -30,11 +30,30 @@ from .schema import (
     RaceContext,
 )
 from .scoring import build_prediction
+from .simple_leading_signal_v02 import (
+    BugType,
+    Going,
+    SimpleHorseFeatures,
+    SimpleLeadingSignalLambdaV02,
+    SimplePredictionOutput,
+    SimpleRaceContext,
+    SimpleScoreBreakdown,
+)
+from .validation_2026_09_06 import (
+    RecordedFrozenPrediction,
+    RecordedRaceResult,
+    ThreeRaceValidationReport,
+    VALIDATION_RECORDS_2026_09_06,
+    validate_record,
+    validation_summary_2026_09_06,
+)
 
 __all__ = [
     "AggregateEvidence",
+    "BugType",
     "ComponentWeights",
     "EvaluationReport",
+    "Going",
     "HorseEntry",
     "HorseMonthlyEvidence",
     "LeadingSignalPolicy",
@@ -47,6 +66,15 @@ __all__ = [
     "PredictionRow",
     "RaceContext",
     "RaceDayHorseInput",
+    "RecordedFrozenPrediction",
+    "RecordedRaceResult",
+    "SimpleHorseFeatures",
+    "SimpleLeadingSignalLambdaV02",
+    "SimplePredictionOutput",
+    "SimpleRaceContext",
+    "SimpleScoreBreakdown",
+    "ThreeRaceValidationReport",
+    "VALIDATION_RECORDS_2026_09_06",
     "body_weight_fit",
     "build_monthly_condition_stats",
     "build_prediction",
@@ -59,4 +87,6 @@ __all__ = [
     "pace_position_score",
     "rank_odds_distortion",
     "recent_form_score",
+    "validate_record",
+    "validation_summary_2026_09_06",
 ]
