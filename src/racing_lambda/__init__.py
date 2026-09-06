@@ -12,6 +12,14 @@ from .layer2_live_input import (
     pace_position_score,
     recent_form_score,
 )
+from .monthly_stats_db import (
+    AggregateEvidence,
+    HorseMonthlyEvidence,
+    MonthlyBuildResult,
+    MonthlySnapshot,
+    build_monthly_condition_stats,
+    build_snapshot_stats,
+)
 from .odds import OddsDistortion, rank_odds_distortion
 from .schema import (
     ComponentWeights,
@@ -24,11 +32,15 @@ from .schema import (
 from .scoring import build_prediction
 
 __all__ = [
+    "AggregateEvidence",
     "ComponentWeights",
     "EvaluationReport",
     "HorseEntry",
+    "HorseMonthlyEvidence",
     "LeadingSignalPolicy",
+    "MonthlyBuildResult",
     "MonthlyConditionStats",
+    "MonthlySnapshot",
     "OddsDistortion",
     "OfficialResult",
     "PastRun",
@@ -36,7 +48,9 @@ __all__ = [
     "RaceContext",
     "RaceDayHorseInput",
     "body_weight_fit",
+    "build_monthly_condition_stats",
     "build_prediction",
+    "build_snapshot_stats",
     "build_statistical_inputs",
     "evaluate_prediction",
     "freeze_prediction",
