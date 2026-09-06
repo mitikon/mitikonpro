@@ -29,7 +29,7 @@ class RaceRecoveryPlan:
     unresolved_horses: tuple[str, ...] = ()
 
 
-def chukyo_2yo_recovery_plan() -> RaceRecoveryPlan:
+def chukyo_2yo_recovery_plan(*, monthly_snapshot_available: bool = False) -> RaceRecoveryPlan:
     recovered = set(recovered_horse_ids())
     gaps: list[HorseRecoveryGap] = []
     unresolved: list[str] = []
@@ -43,9 +43,9 @@ def chukyo_2yo_recovery_plan() -> RaceRecoveryPlan:
         gaps.append(HorseRecoveryGap(horse_id=horse_id, missing=tuple(sorted(missing))))
 
     # Horse-level historical race details are now recovered for all nine
-    # runners.  What remains is the race-level monthly statistical database
-    # required by the current layer-2 architecture.
-    race_level_missing = (
+    # runners.  Until a frozen month-end snapshot is attached, the three
+    # statistical condition families remain explicitly missing.
+    race_level_missing = () if monthly_snapshot_available else (
         "monthly_course_distance_surface_stats",
         "monthly_going_weather_season_stats",
         "monthly_meeting_frequency_stats",
