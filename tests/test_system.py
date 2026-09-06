@@ -118,6 +118,9 @@ def test_collector_maps_symbols_and_excludes_end_date():
     result = collector.collect("2024-01-02", "2024-01-05")
     assert list(result.close.columns) == tickers
     assert result.close.index.max() == pd.Timestamp("2024-01-04")
+    assert result.open is not None
+    assert result.high is not None
+    assert result.low is not None
 
 
 def test_collector_rejects_missing_required_series():

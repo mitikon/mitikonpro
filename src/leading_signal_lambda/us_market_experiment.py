@@ -1,0 +1,203 @@
+"""米国市場PCA SUBを実データで検証するコマンド。"""
+
+from __future__ import annotations
+
+import argparse
+import json
+from pathlib import Path
+
+import pandas as pd
+
+from .collector import DailyMarketCollector, MarketDataset
+from .market_calendar import NYSETradingCalendar
+from .us_market_pca_sub import prepare_us_market_returns
+from .us_market_validation import USMarketBacktestResult, run_us_market_backtest
+from .sector_rotation import SECTOR_ETFS
+from .sector_rotation_validation import (
+    SectorRotationBacktestResult,
+    run_sector_rotation_backtest,
+)
+from .market_internals import build_market_internal_features
+
+
+def validate_us_market_dataset(
+    dataset: MarketDataset,
+    output_dir: str | Path,
+    *,
+    prior_end: str = "2021-12-31",
+    evaluation_start: str = "2022-01-01",
+    calibration_observations: int = 60,
+    signal_threshold: float = 0.25,
+    transaction_cost_bps: float = 5.0,
+) -> USMarketBacktestResult:
+    """事前期間と評価期間を分離し、結果と診断情報を保存する。"""
+    output = Path(output_dir)
+    output.mkdir(parents=True, exist_ok=True)
+    returns = prepare_us_market_returns(dataset.close)
+    prior_end_ts = pd.Timestamp(prior_end)
+    evaluation_start_ts = pd.Timestamp(evaluation_start)
+    if prior_end_ts >= evaluation_start_ts:
+        raise ValueError("prior_end must be earlier than evaluation_start")
+
+    prior = returns.loc[returns.index <= prior_end_ts]
+    evaluation = returns.loc[returns.index >= evaluation_start_ts]
+    if prior.empty or evaluation.empty:
+        raise ValueError("prior or evaluation period has no complete observations")
+
+    diagnostics = {
+        "prior_first_date": str(prior.index.min().date()),
+        "prior_last_date": str(prior.index.max().date()),
+        "prior_rows": len(prior),
+        "evaluation_first_date": str(evaluation.index.min().date()),
+        "evaluation_last_date": str(evaluation.index.max().date()),
+        "evaluation_rows": len(evaluation),
+        "paper_lambda_prior": 0.90,
+        "paper_window": 60,
+        "paper_components": 3,
+        "calibration_observations": calibration_observations,
+        "signal_threshold": signal_threshold,
+        "transaction_cost_bps": transaction_cost_bps,
+    }
+    (output / "us_pca_sub_data_diagnostics.json").write_text(
+        json.dumps(diagnostics, indent=2), encoding="utf-8"
+    )
+    result = run_us_market_backtest(
+        evaluation,
+        prior,
+        calibration_observations=calibration_observations,
+        signal_threshold=signal_threshold,
+        transaction_cost_bps=transaction_cost_bps,
+    )
+    result.save_frozen(output / "us_pca_sub_frozen_predictions.csv")
+    (output / "us_pca_sub_validation_summary.json").write_text(
+        json.dumps(result.metrics, indent=2, allow_nan=False), encoding="utf-8"
+    )
+    return result
+
+
+def validate_sector_rotation_dataset(
+    dataset: MarketDataset,
+    output_dir: str | Path,
+    *,
+    prior_end: str = "2021-12-31",
+    evaluation_start: str = "2022-01-01",
+) -> SectorRotationBacktestResult:
+    """11セクター最大歪みと売買状態を実データで検証する。"""
+    if dataset.open is None or dataset.unadjusted_close is None:
+        raise ValueError("sector rotation requires daily open and unadjusted close prices")
+    all_returns = prepare_us_market_returns(dataset.close)
+    prior_end_ts = pd.Timestamp(prior_end)
+    evaluation_start_ts = pd.Timestamp(evaluation_start)
+    prior = all_returns.loc[all_returns.index <= prior_end_ts, list(SECTOR_ETFS)]
+    evaluation = all_returns.loc[
+        all_returns.index >= evaluation_start_ts, list(SECTOR_ETFS)
+    ]
+    opens = dataset.open.reindex(evaluation.index).loc[:, list(SECTOR_ETFS)]
+    closes = dataset.unadjusted_close.reindex(evaluation.index).loc[:, list(SECTOR_ETFS)]
+    benchmark = all_returns.loc[evaluation.index, "SPY"]
+    champion = run_sector_rotation_backtest(
+        evaluation,
+        prior,
+        opens,
+        closes,
+        benchmark_returns=benchmark,
+    )
+    output = Path(output_dir)
+    champion.save_frozen(output)
+    internal_features = build_market_internal_features(dataset.close, dataset.volume)
+    challenger = run_sector_rotation_backtest(
+        evaluation,
+        prior,
+        opens,
+        closes,
+        benchmark_returns=benchmark,
+        internal_features=internal_features,
+    )
+    challenger.save_frozen(output / "market_internals_challenger")
+    diagnostics = {
+        "prior_first_date": str(prior.index.min().date()),
+        "prior_last_date": str(prior.index.max().date()),
+        "prior_rows": len(prior),
+        "evaluation_first_date": str(evaluation.index.min().date()),
+        "evaluation_last_date": str(evaluation.index.max().date()),
+        "evaluation_rows": len(evaluation),
+        "targets": list(SECTOR_ETFS),
+        "position_limit": 1,
+        "entry_threshold": 0.25,
+        "take_profit": 0.10,
+        "stop_loss": 0.05,
+        "max_holding_days": 15,
+        "transaction_cost_bps": 5.0,
+    }
+    (output / "sector_rotation_diagnostics.json").write_text(
+        json.dumps(diagnostics, indent=2), encoding="utf-8"
+    )
+    improves_return = (
+        challenger.metrics["annualized_return"] > champion.metrics["annualized_return"]
+    )
+    improves_drawdown = (
+        challenger.metrics["maximum_drawdown"] > champion.metrics["maximum_drawdown"]
+    )
+    stage_decision = "RETEST_REQUIRED" if improves_return and improves_drawdown else "REJECT"
+    (output / "market_internals_comparison.json").write_text(
+        json.dumps(
+            {
+                "stage_decision": stage_decision,
+                "improves_return": improves_return,
+                "improves_drawdown": improves_drawdown,
+                "champion": champion.metrics,
+                "challenger": challenger.metrics,
+            },
+            indent=2,
+            allow_nan=False,
+        ),
+        encoding="utf-8",
+    )
+    return challenger
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser(
+        description="Validate the US-market paper PCA SUB leading signal"
+    )
+    parser.add_argument("--start", default="2019-01-01")
+    parser.add_argument("--end-exclusive", default="auto")
+    parser.add_argument("--prior-end", default="2021-12-31")
+    parser.add_argument("--evaluation-start", default="2022-01-01")
+    parser.add_argument("--output", default="artifacts/us_pca_sub_validation")
+    parser.add_argument(
+        "--exceptional-closures", default="config/exceptional_nyse_closures.json"
+    )
+    args = parser.parse_args()
+
+    if args.end_exclusive == "auto":
+        completed = NYSETradingCalendar(
+            exceptional_closures=args.exceptional_closures
+        ).last_completed_session()
+        end_exclusive = completed.end_exclusive.isoformat()
+    else:
+        end_exclusive = args.end_exclusive
+
+    dataset = DailyMarketCollector().collect(args.start, end_exclusive)
+    result = validate_us_market_dataset(
+        dataset,
+        args.output,
+        prior_end=args.prior_end,
+        evaluation_start=args.evaluation_start,
+    )
+    rotation = validate_sector_rotation_dataset(
+        dataset,
+        Path(args.output) / "sector_rotation",
+        prior_end=args.prior_end,
+        evaluation_start=args.evaluation_start,
+    )
+    print(
+        json.dumps(
+            {"spy_qqq_baseline": result.metrics, "sector_rotation": rotation.metrics},
+            ensure_ascii=False,
+        )
+    )
+
+
+if __name__ == "__main__":
+    main()

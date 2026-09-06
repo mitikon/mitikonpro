@@ -6,6 +6,16 @@ from .validation import WalkForwardResult, walk_forward_validate
 from .collector import DailyMarketCollector, MarketDataset, DEFAULT_UNIVERSE
 from .paper_backtest import PaperBacktestResult, run_paper_backtest
 from .paper_pca_sub import PaperPcaSubModel, PaperSignal
+from .us_market_pca_sub import USMarketPcaSubModel, USMarketSignal, prepare_us_market_returns
+from .us_market_validation import USMarketBacktestResult, run_us_market_backtest
+from .sector_rotation import LaggedSectorPcaSubModel, SectorRotationSignal
+from .sector_rotation_validation import (
+    PositionState,
+    SectorRotationBacktestResult,
+    decide_position_action,
+    run_sector_rotation_backtest,
+)
+from .market_internals import MarketInternalRidgeModel, build_market_internal_features
 
 __all__ = [
     "LeadingLambdaClassifier",
@@ -21,4 +31,17 @@ __all__ = [
     "PaperSignal",
     "PaperBacktestResult",
     "run_paper_backtest",
+    "USMarketPcaSubModel",
+    "USMarketSignal",
+    "prepare_us_market_returns",
+    "USMarketBacktestResult",
+    "run_us_market_backtest",
+    "LaggedSectorPcaSubModel",
+    "SectorRotationSignal",
+    "PositionState",
+    "SectorRotationBacktestResult",
+    "decide_position_action",
+    "run_sector_rotation_backtest",
+    "MarketInternalRidgeModel",
+    "build_market_internal_features",
 ]

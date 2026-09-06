@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "leading-signal-lambda"
-version = "0.3.0"
+version = "0.6.0"
 description = "Auditable leading-signal research for markets and horse racing"
 requires-python = ">=3.10"
 dependencies = ["numpy>=1.24", "pandas>=2.0"]
@@ -16,6 +16,7 @@ data = ["yfinance>=0.2.54", "exchange-calendars>=4.5"]
 [project.scripts]
 leading-lambda-collect = "leading_signal_lambda.collector:main"
 leading-lambda-validate = "leading_signal_lambda.experiment:main"
+leading-lambda-us-validate = "leading_signal_lambda.us_market_experiment:main"
 
 [tool.pytest.ini_options]
 pythonpath = ["src"]
