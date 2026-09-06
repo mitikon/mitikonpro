@@ -9,6 +9,12 @@ post-race information.
 The purpose is to test whether the portable core identified at Chukyo
 (position-neutral + market-gap removed + performance-detail) reproduces on a
 second race without result-tuned weight search.
+
+Important: the original bridge persisted only the ordinal ranking, not every
+horse's continuous pre-shrink score. Therefore later course-specialization work
+must not fabricate numeric base scores from rank positions. Full combined
+reranking is blocked until those continuous scores are rebuilt from pre-race
+features.
 """
 from __future__ import annotations
 
@@ -25,11 +31,6 @@ class ExternalValidationResult:
     finding: str
 
 
-# Frozen output from the recovered pre-race-only bridge calculation.
-# Inputs: last-five finish/field/surface/distance/going/clock/final-section,
-# target=Niigata turf straight 1000m good, pace neutral, market-gap removed,
-# missing historical jockey/trainer aggregate blocks held neutral (0.5), and
-# performance-detail kept at the same 0.12 weight used in the Chukyo diagnostic.
 IBIS_BRIDGE_RANKING = (
     "16", "1", "9", "6", "12", "2", "17", "8", "10",
     "4", "5", "15", "11", "13", "14", "7", "3",
@@ -45,13 +46,13 @@ def ibis_external_validation() -> ExternalValidationResult:
         official_top5=IBIS_OFFICIAL_TOP5,
         top5_hits=hits,
         limitation=(
-            "Exact pre-race jockey/trainer aggregate blocks from the historical workflow are not yet recovered; "
-            "they are neutralized, so this is a component portability test rather than a full layer-2 replay."
+            "Exact pre-race jockey/trainer aggregate blocks are not yet recovered and the original bridge did not "
+            "persist continuous per-horse base scores. Rank positions must not be converted into fake scores for "
+            "later feature fusion."
         ),
         finding=(
-            "The portable Chukyo performance-detail core falls to 2/5.  The main structural warning is that "
-            "normalizing clocks only within each historical distance does not express target-course specialization. "
-            "For a unique straight 1000m race, exact course/distance fit must be represented independently rather "
-            "than inferred from generic 1000/1200m speed. No result-fitted reweighting is applied here."
+            "The portable Chukyo performance-detail core falls to 2/5. Course specialization is separately "
+            "supported by pre-race turf-1000 evidence, but a combined Top5 improvement remains unproven until the "
+            "continuous bridge scores are rebuilt from pre-race features."
         ),
     )
