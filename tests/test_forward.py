@@ -16,7 +16,7 @@ class FakeCalendar:
 def sample_dataset(rows=760):
     index = pd.bdate_range("2022-01-03", periods=rows)
     rng = np.random.default_rng(42)
-    symbols = list(REQUIRED_SYMBOLS) + ["XLB", "XLC", "XLE", "XLF", "XLI", "XLK", "XLRE", "XLU", "XLV"]
+    symbols = list(REQUIRED_SYMBOLS) + ["DIA", "IWM", "XLB", "XLC", "XLE", "XLF", "XLI", "XLK", "XLRE", "XLU", "XLV"]
     close = pd.DataFrame(
         100 * np.exp(np.cumsum(rng.normal(0.0003, 0.01, size=(rows, len(symbols))), axis=0)),
         index=index,
@@ -36,6 +36,7 @@ def test_forward_signal_uses_latest_row_without_known_outcome(tmp_path):
     assert {record.target for record in records} == {"SPY", "QQQ"}
     assert all(record.signal_session == dataset.close.index[-1].date().isoformat() for record in records)
     assert all(record.training_last_date < record.signal_session for record in records)
+    assert all(record.excluded_feature_count >= 0 for record in records)
     assert all(record.status == "PENDING" for record in records)
     frozen = freeze_signals(records, tmp_path / "forward.json")
     assert json.loads(frozen.read_text())["signals"][0]["input_sha256"]

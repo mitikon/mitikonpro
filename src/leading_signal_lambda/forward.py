@@ -19,6 +19,11 @@ from .signals import REQUIRED_SYMBOLS, build_leading_features, build_training_se
 
 
 SCHEMA_VERSION = "market-forward-v1"
+FORWARD_REQUIRED_CLOSE = tuple(
+    dict.fromkeys(
+        (*REQUIRED_SYMBOLS, "DIA", "IWM", "XLB", "XLC", "XLE", "XLF", "XLI", "XLK", "XLRE", "XLU", "XLV")
+    )
+)
 
 
 @dataclass(frozen=True)
@@ -37,6 +42,7 @@ class FrozenMarketSignal:
     training_last_date: str
     training_rows: int
     feature_count: int
+    excluded_feature_count: int
     imputed_feature_count: int
     lambda_reg: float
     variance_target: float
@@ -55,10 +61,13 @@ def _utc_iso(value: pd.Timestamp | None = None) -> str:
 
 
 def _signal_session(dataset: MarketDataset) -> pd.Timestamp:
-    required = dataset.close.loc[:, list(REQUIRED_SYMBOLS)]
+    missing_columns = sorted(set(FORWARD_REQUIRED_CLOSE) - set(dataset.close.columns))
+    if missing_columns:
+        raise ValueError(f"forward signal is missing required close columns: {missing_columns}")
+    required = dataset.close.loc[:, list(FORWARD_REQUIRED_CLOSE)]
     valid = required.notna().all(axis=1)
     if not valid.any():
-        raise ValueError("no completed row contains every required market series")
+        raise ValueError("no completed row contains the complete forward market universe")
     return pd.Timestamp(required.index[valid][-1])
 
 
@@ -86,8 +95,15 @@ def generate_forward_signals(
     volume = dataset.volume.reindex(close.index)
     features = build_leading_features(close, volume)
     latest = features.loc[signal_session].replace([np.inf, -np.inf], np.nan)
-    past_medians = features.loc[features.index < signal_session].median(axis=0, skipna=True)
-    usable = past_medians.index[past_medians.notna()]
+    past_features = features.loc[features.index < signal_session]
+    past_medians = past_features.median(axis=0, skipna=True)
+    # A series that reappears today after a long provider gap must not drag the
+    # complete-case training cutoff months backwards. Keep only features with
+    # strong coverage in the most recent year, using information available now.
+    recent_coverage = past_features.tail(252).notna().mean(axis=0)
+    usable = past_medians.index[
+        past_medians.notna() & recent_coverage.ge(0.95)
+    ]
     latest = latest.loc[usable]
     imputed = latest.isna()
     latest = latest.fillna(past_medians.loc[usable])
@@ -102,6 +118,12 @@ def generate_forward_signals(
         X, y, _ = build_training_set(features.loc[:, usable], close[target], neutral_band=neutral_band)
         if X.empty or X.index.max() >= signal_session:
             raise ValueError("training data unexpectedly includes the pending signal session")
+        prior_target_sessions = close[target].dropna().index
+        prior_target_sessions = prior_target_sessions[prior_target_sessions < signal_session]
+        if len(prior_target_sessions) == 0 or X.index.max() != prior_target_sessions[-1]:
+            raise ValueError(
+                f"{target}: recent training cutoff {X.index.max()} does not reach the prior target session"
+            )
         model = LeadingLambdaClassifier(
             lambda_reg=0.10,
             variance_target=0.90,
@@ -125,6 +147,7 @@ def generate_forward_signals(
                 training_last_date=X.index.max().date().isoformat(),
                 training_rows=len(X),
                 feature_count=len(usable),
+                excluded_feature_count=len(features.columns) - len(usable),
                 imputed_feature_count=int(imputed.sum()),
                 lambda_reg=0.10,
                 variance_target=0.90,

@@ -1,6 +1,7 @@
 import numpy as np
 import pandas as pd
 import json
+import pytest
 
 from leading_signal_lambda import (
     DailyMarketCollector,
@@ -92,6 +93,25 @@ def test_market_holiday_does_not_poison_next_twenty_volume_rows():
     ratio = features["volume_ratio_SPY"]
     assert pd.isna(ratio.loc[volume.index[60]])
     assert pd.notna(ratio.loc[volume.index[61]])
+
+
+def test_union_calendar_holiday_does_not_erase_next_nyse_return_lags():
+    close, volume = sample_market(120)
+    previous = close.index[60]
+    following = close.index[61]
+    holiday = previous + pd.Timedelta(hours=12)
+    holiday_close = pd.DataFrame(np.nan, index=[holiday], columns=close.columns)
+    holiday_close.loc[holiday, "VIX9D"] = close.loc[previous, "VIX9D"] * 1.001
+    holiday_volume = pd.DataFrame(np.nan, index=[holiday], columns=volume.columns)
+    close = pd.concat([close, holiday_close]).sort_index()
+    volume = pd.concat([volume, holiday_volume]).sort_index()
+
+    features = build_leading_features(close, volume)
+    expected = close.loc[following, "SPY"] / close.loc[previous, "SPY"] - 1.0
+    earlier = close.index[close.index < previous][-1]
+    expected_lag2 = close.loc[previous, "SPY"] / close.loc[earlier, "SPY"] - 1.0
+    assert features.loc[following, "ret_SPY_lag1"] == pytest.approx(expected)
+    assert features.loc[following, "ret_SPY_lag2"] == pytest.approx(expected_lag2)
 
 
 def test_unsorted_input_is_rejected():
