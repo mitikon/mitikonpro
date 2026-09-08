@@ -39,6 +39,25 @@ jobs:
         env:
           START_DATE: ${{ inputs.start_date || '2015-01-01' }}
         run: leading-lambda-validate --start "$START_DATE" --output artifacts/validation
+      - name: Download previous frozen signal
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          previous_run=$(gh api "repos/${GITHUB_REPOSITORY}/actions/workflows/daily-validation.yml/runs?status=success&per_page=10" --jq ".workflow_runs | map(select(.id != ${GITHUB_RUN_ID})) | first | .id")
+          if [ -n "$previous_run" ] && [ "$previous_run" != "null" ]; then
+            gh run download "$previous_run" --repo "$GITHUB_REPOSITORY" --pattern "leading-lambda-validation-*" --dir artifacts/previous
+          fi
+      - name: Freeze next-session signals
+        env:
+          START_DATE: ${{ inputs.start_date || '2015-01-01' }}
+        run: |
+          previous=$(find artifacts/previous -name forward_signal.json -print -quit 2>/dev/null || true)
+          if [ -n "$previous" ]; then
+            leading-lambda-forward --input-dir artifacts/validation/raw --output artifacts/validation/forward_signal.json --previous "$previous"
+          else
+            leading-lambda-forward --input-dir artifacts/validation/raw --output artifacts/validation/forward_signal.json
+          fi
       - name: Upload immutable validation result
         if: always()
         uses: actions/upload-artifact@v4
