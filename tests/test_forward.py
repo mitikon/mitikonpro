@@ -4,7 +4,7 @@ import numpy as np
 import pandas as pd
 
 from leading_signal_lambda.collector import MarketDataset
-from leading_signal_lambda.forward import freeze_signals, generate_forward_signals, load_dataset, settle_frozen_signals
+from leading_signal_lambda.forward import carry_forward_same_session, freeze_signals, generate_forward_signals, load_dataset, settle_frozen_signals
 from leading_signal_lambda.signals import REQUIRED_SYMBOLS
 
 
@@ -72,3 +72,16 @@ def test_loads_already_collected_csv_without_second_provider_call(tmp_path):
     actual = load_dataset(tmp_path)
     pd.testing.assert_frame_equal(actual.close, expected.close, check_freq=False, check_names=False)
     pd.testing.assert_frame_equal(actual.volume, expected.volume, check_freq=False, check_names=False)
+
+
+def test_same_session_carries_first_signal_without_recalculation(tmp_path):
+    dataset = sample_dataset()
+    records = generate_forward_signals(
+        dataset,
+        FakeCalendar(),
+        generated_at_utc=pd.Timestamp("2026-09-09T02:15:00Z"),
+    )
+    previous = freeze_signals(records, tmp_path / "previous.json")
+    carried = carry_forward_same_session(previous, dataset, tmp_path / "current.json")
+    assert carried is not None
+    assert carried.read_bytes() == previous.read_bytes()
