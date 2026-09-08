@@ -18,7 +18,7 @@ from .model import LeadingLambdaClassifier
 from .signals import REQUIRED_SYMBOLS, build_leading_features, build_training_set
 
 
-SCHEMA_VERSION = "market-forward-v1"
+SCHEMA_VERSION = "market-forward-v2"
 FORWARD_REQUIRED_CLOSE = tuple(
     dict.fromkeys(
         (*REQUIRED_SYMBOLS, "DIA", "IWM", "XLB", "XLC", "XLE", "XLF", "XLI", "XLK", "XLRE", "XLU", "XLV")
@@ -168,6 +168,33 @@ def freeze_signals(records: list[FrozenMarketSignal], path: str | Path) -> Path:
     return destination
 
 
+def carry_forward_same_session(
+    previous_path: str | Path,
+    dataset: MarketDataset,
+    output_path: str | Path,
+) -> Path | None:
+    """Preserve the first v2 forecast when the same input session runs again."""
+    source = Path(previous_path)
+    if not source.exists():
+        return None
+    document = json.loads(source.read_text(encoding="utf-8"))
+    signals = document.get("signals", [])
+    current_session = _signal_session(dataset).date().isoformat()
+    if (
+        document.get("schema_version") != SCHEMA_VERSION
+        or not signals
+        or any(signal.get("schema_version") != SCHEMA_VERSION for signal in signals)
+        or any(signal.get("signal_session") != current_session for signal in signals)
+    ):
+        return None
+    destination = Path(output_path)
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    if destination.exists():
+        raise FileExistsError(f"refusing to overwrite carried signal: {destination}")
+    destination.write_text(source.read_text(encoding="utf-8"), encoding="utf-8")
+    return destination
+
+
 def settle_frozen_signals(
     frozen_path: str | Path,
     dataset: MarketDataset,
@@ -238,8 +265,12 @@ def main() -> None:
     else:
         completed = calendar.last_completed_session()
         dataset = DailyMarketCollector().collect(args.start, completed.end_exclusive.isoformat())
-    records = generate_forward_signals(dataset, calendar)
-    path = freeze_signals(records, args.output)
+    path = None
+    if args.previous:
+        path = carry_forward_same_session(args.previous, dataset, args.output)
+    if path is None:
+        records = generate_forward_signals(dataset, calendar)
+        path = freeze_signals(records, args.output)
     print(path.read_text(encoding="utf-8"))
     if args.previous:
         settled = settle_frozen_signals(args.previous, dataset, args.settlement_output)
