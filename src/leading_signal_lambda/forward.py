@@ -18,7 +18,29 @@ from .model import LeadingLambdaClassifier
 from .signals import REQUIRED_SYMBOLS, build_leading_features, build_training_set
 
 
-SCHEMA_VERSION = "market-forward-v2"
+SCHEMA_VERSION = "market-forward-v3"
+TARGET_METADATA: dict[str, tuple[str, str]] = {
+    "SPY": ("市場ETF", "S&P 500"),
+    "QQQ": ("市場ETF", "NASDAQ 100"),
+    "DIA": ("市場ETF", "Dow Jones"),
+    "RSP": ("市場ETF", "S&P 500均等加重"),
+    "IWM": ("市場ETF", "Russell 2000"),
+    "SMH": ("テーマETF", "半導体"),
+    "HYG": ("信用ETF", "ハイイールド債"),
+    "LQD": ("信用ETF", "投資適格社債"),
+    "XLB": ("セクターETF", "素材"),
+    "XLC": ("セクターETF", "コミュニケーション"),
+    "XLE": ("セクターETF", "エネルギー"),
+    "XLF": ("セクターETF", "金融"),
+    "XLI": ("セクターETF", "資本財"),
+    "XLK": ("セクターETF", "情報技術"),
+    "XLP": ("セクターETF", "生活必需品"),
+    "XLRE": ("セクターETF", "不動産"),
+    "XLU": ("セクターETF", "公益"),
+    "XLV": ("セクターETF", "ヘルスケア"),
+    "XLY": ("セクターETF", "一般消費財"),
+}
+FORWARD_TARGETS = tuple(TARGET_METADATA)
 FORWARD_REQUIRED_CLOSE = tuple(
     dict.fromkeys(
         (*REQUIRED_SYMBOLS, "DIA", "IWM", "XLB", "XLC", "XLE", "XLF", "XLI", "XLK", "XLRE", "XLU", "XLV")
@@ -33,8 +55,11 @@ class FrozenMarketSignal:
     signal_session: str
     target_session: str
     target: str
+    target_category: str
+    target_name: str
     action: str
     predicted_class: int
+    predicted_return: float
     confidence: float
     edge: float
     probabilities: dict[str, float]
@@ -86,7 +111,7 @@ def generate_forward_signals(
     dataset: MarketDataset,
     calendar: NYSETradingCalendar,
     generated_at_utc: pd.Timestamp | None = None,
-    targets: tuple[str, ...] = ("SPY", "QQQ"),
+    targets: tuple[str, ...] = FORWARD_TARGETS,
     neutral_band: float = 0.001,
 ) -> list[FrozenMarketSignal]:
     """Fit only on known outcomes and predict the session after the latest input row."""
@@ -115,7 +140,9 @@ def generate_forward_signals(
     digest = _input_hash(dataset, signal_session)
     records: list[FrozenMarketSignal] = []
     for target in targets:
-        X, y, _ = build_training_set(features.loc[:, usable], close[target], neutral_band=neutral_band)
+        X, y, next_returns = build_training_set(
+            features.loc[:, usable], close[target], neutral_band=neutral_band
+        )
         if X.empty or X.index.max() >= signal_session:
             raise ValueError("training data unexpectedly includes the pending signal session")
         prior_target_sessions = close[target].dropna().index
@@ -131,6 +158,14 @@ def generate_forward_signals(
             min_samples=60,
         ).fit(X, y)
         prediction = model.predict_one(latest)
+        class_mean_returns = next_returns.groupby(y).mean().to_dict()
+        predicted_return = float(
+            sum(
+                probability * float(class_mean_returns.get(cls, 0.0))
+                for cls, probability in prediction.probabilities.items()
+            )
+        )
+        category, target_name = TARGET_METADATA.get(target, ("ETF", target))
         records.append(
             FrozenMarketSignal(
                 schema_version=SCHEMA_VERSION,
@@ -138,8 +173,11 @@ def generate_forward_signals(
                 signal_session=signal_session.date().isoformat(),
                 target_session=target_session.isoformat(),
                 target=target,
+                target_category=category,
+                target_name=target_name,
                 action=prediction.action,
                 predicted_class=prediction.predicted_class,
+                predicted_return=predicted_return,
                 confidence=prediction.confidence,
                 edge=prediction.edge,
                 probabilities={str(key): value for key, value in prediction.probabilities.items()},
@@ -173,7 +211,7 @@ def carry_forward_same_session(
     dataset: MarketDataset,
     output_path: str | Path,
 ) -> Path | None:
-    """Preserve the first v2 forecast when the same input session runs again."""
+    """Preserve the first v3 forecast when the same input session runs again."""
     source = Path(previous_path)
     if not source.exists():
         return None
@@ -220,6 +258,10 @@ def settle_frozen_signals(
         band = float(signal["neutral_band"])
         actual_class = 1 if actual_return > band else -1 if actual_return < -band else 0
         predicted_class = int(signal["predicted_class"])
+        predicted_return = signal.get("predicted_return")
+        signed_error = (
+            actual_return - float(predicted_return) if predicted_return is not None else None
+        )
         settlements.append(
             {
                 **signal,
@@ -228,6 +270,8 @@ def settle_frozen_signals(
                 "actual_class": actual_class,
                 "direction_correct": predicted_class == actual_class,
                 "strategy_return_before_cost": predicted_class * actual_return,
+                "return_error": signed_error,
+                "absolute_divergence_pp": abs(signed_error) * 100.0 if signed_error is not None else None,
             }
         )
     if not settlements:
@@ -240,6 +284,161 @@ def settle_frozen_signals(
         json.dumps({"schema_version": SCHEMA_VERSION, "settlements": settlements}, ensure_ascii=False, indent=2),
         encoding="utf-8",
     )
+    return destination
+
+
+REPORT_COLUMNS = (
+    "signal_session", "target_session", "target", "target_category", "target_name",
+    "action", "predicted_class", "predicted_return", "confidence", "edge",
+    "actual_return", "actual_class", "direction_correct",
+    "return_error", "absolute_divergence_pp", "strategy_return_before_cost",
+    "input_sha256",
+)
+
+
+def _rate(frame: pd.DataFrame, column: str = "direction_correct") -> float | None:
+    if frame.empty:
+        return None
+    values = frame[column]
+    if values.dtype == bool:
+        return float(values.mean())
+    normalized = values.map(
+        lambda value: value
+        if isinstance(value, (bool, np.bool_))
+        else str(value).strip().lower() in {"true", "1"}
+    )
+    return float(normalized.mean())
+
+
+def write_signal_result_report(
+    settlement_path: str | Path,
+    report_path: str | Path,
+    rows_path: str | Path,
+    history_path: str | Path,
+    previous_history_path: str | Path | None = None,
+) -> tuple[Path, Path, Path]:
+    """Create a separate daily/cumulative audit report from settled frozen signals."""
+    settlement = json.loads(Path(settlement_path).read_text(encoding="utf-8"))
+    rows = pd.DataFrame(settlement["settlements"])
+    for column in REPORT_COLUMNS:
+        if column not in rows:
+            rows[column] = np.nan
+    rows = rows.loc[:, REPORT_COLUMNS]
+    rows_destination = Path(rows_path)
+    rows_destination.parent.mkdir(parents=True, exist_ok=True)
+    rows.to_csv(rows_destination, index=False, float_format="%.10g")
+
+    history = rows.copy()
+    if previous_history_path and Path(previous_history_path).exists():
+        previous = pd.read_csv(previous_history_path)
+        history = pd.concat([previous, rows], ignore_index=True, sort=False)
+    history = history.drop_duplicates(subset=["signal_session", "target"], keep="first")
+    history = history.sort_values(["signal_session", "target"], kind="stable")
+    history_destination = Path(history_path)
+    history_destination.parent.mkdir(parents=True, exist_ok=True)
+    history.to_csv(history_destination, index=False, float_format="%.10g")
+
+    sector_rows = rows[rows["target_category"] == "セクターETF"]
+    other_rows = rows[rows["target_category"] != "セクターETF"]
+    divergence = pd.to_numeric(rows["absolute_divergence_pp"], errors="coerce").dropna()
+    cumulative_divergence = pd.to_numeric(
+        history["absolute_divergence_pp"], errors="coerce"
+    ).dropna()
+    cumulative_sectors = history[history["target_category"] == "セクターETF"]
+    cumulative_other = history[history["target_category"] != "セクターETF"]
+
+    def records(frame: pd.DataFrame, count: int = 5) -> list[dict[str, object]]:
+        return json.loads(frame.head(count).to_json(orient="records", force_ascii=False))
+
+    risers = rows.sort_values("actual_return", ascending=False)
+    fallers = rows.sort_values("actual_return", ascending=True)
+    misses = rows.sort_values("absolute_divergence_pp", ascending=False, na_position="last")
+    report = {
+        "schema_version": "signal-result-report-v1",
+        "definition": {
+            "direction_correct": "predicted_classとactual_classの一致",
+            "absolute_divergence_pp": "abs(actual_return - predicted_return) * 100（％ポイント）",
+            "no_lookahead": "予測値は凍結済みforward_signalから取得し、結果で再計算しない",
+        },
+        "daily": {
+            "signal_session": str(rows["signal_session"].iloc[0]),
+            "target_session": str(rows["target_session"].iloc[0]),
+            "settled_targets": int(len(rows)),
+            "direction_accuracy": _rate(rows),
+            "sector_direction_accuracy": _rate(sector_rows),
+            "other_etf_direction_accuracy": _rate(other_rows),
+            "mean_absolute_divergence_pp": float(divergence.mean()) if len(divergence) else None,
+            "median_absolute_divergence_pp": float(divergence.median()) if len(divergence) else None,
+            "results": records(rows, len(rows)),
+            "largest_risers": records(risers),
+            "largest_fallers": records(fallers),
+            "largest_forecast_misses": records(misses),
+        },
+        "cumulative": {
+            "settled_predictions": int(len(history)),
+            "settled_sessions": int(history["signal_session"].nunique()),
+            "direction_accuracy": _rate(history),
+            "sector_direction_accuracy": _rate(cumulative_sectors),
+            "other_etf_direction_accuracy": _rate(cumulative_other),
+            "mean_absolute_divergence_pp": (
+                float(cumulative_divergence.mean()) if len(cumulative_divergence) else None
+            ),
+            "median_absolute_divergence_pp": (
+                float(cumulative_divergence.median()) if len(cumulative_divergence) else None
+            ),
+        },
+    }
+    report_destination = Path(report_path)
+    report_destination.parent.mkdir(parents=True, exist_ok=True)
+    report_destination.write_text(
+        json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8"
+    )
+    return report_destination, rows_destination, history_destination
+
+
+def write_signal_result_markdown(report_path: str | Path, output_path: str | Path) -> Path:
+    report = json.loads(Path(report_path).read_text(encoding="utf-8"))
+    daily = report["daily"]
+    cumulative = report["cumulative"]
+
+    def percent(value: float | None) -> str:
+        return "—" if value is None else f"{value * 100:.2f}%"
+
+    def movers(title: str, values: list[dict[str, object]]) -> list[str]:
+        lines = [f"## {title}", "", "|順位|ETF|区分|実績騰落率|予測騰落率|方向正誤|乖離（pp）|", "|---:|---|---|---:|---:|---|---:|"]
+        for rank, value in enumerate(values, start=1):
+            predicted = value.get("predicted_return")
+            divergence_value = value.get("absolute_divergence_pp")
+            lines.append(
+                f"|{rank}|{value['target']} {value.get('target_name', '')}|{value.get('target_category', '')}|"
+                f"{float(value['actual_return']) * 100:.2f}%|"
+                f"{'—' if predicted is None else f'{float(predicted) * 100:.2f}%'}|"
+                f"{'正解' if value.get('direction_correct') else '不正解'}|"
+                f"{'—' if divergence_value is None else f'{float(divergence_value):.2f}'}|"
+            )
+        return lines
+
+    lines = [
+        "# 先行シグナル予測λ 正誤・乖離分析レポート",
+        "",
+        f"- 予測基準日: {daily['signal_session']}",
+        f"- 結果対象日: {daily['target_session']}",
+        f"- 確定銘柄数: {daily['settled_targets']}",
+        f"- 全体方向正解率: {percent(daily['direction_accuracy'])}",
+        f"- セクターETF方向正解率: {percent(daily['sector_direction_accuracy'])}",
+        f"- その他ETF方向正解率: {percent(daily['other_etf_direction_accuracy'])}",
+        f"- 平均絶対乖離: {daily['mean_absolute_divergence_pp']:.2f} pp" if daily["mean_absolute_divergence_pp"] is not None else "- 平均絶対乖離: —",
+        f"- 累積方向正解率: {percent(cumulative['direction_accuracy'])}（{cumulative['settled_predictions']}件）",
+        "",
+        "乖離は `abs(実績騰落率 - 予測騰落率)` の％ポイント差です。予測値は発信時点の凍結値で、結果取得後に変更しません。",
+        "",
+    ]
+    lines += movers("実績上昇上位", daily["largest_risers"])
+    lines += [""] + movers("実績下落上位", daily["largest_fallers"])
+    lines += [""] + movers("予測乖離上位", daily["largest_forecast_misses"])
+    destination = Path(output_path)
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    destination.write_text("\n".join(lines) + "\n", encoding="utf-8")
     return destination
 
 
@@ -257,6 +456,11 @@ def main() -> None:
     parser.add_argument("--output", default="artifacts/validation/forward_signal.json")
     parser.add_argument("--previous", default=None)
     parser.add_argument("--settlement-output", default="artifacts/validation/settled_previous_signal.json")
+    parser.add_argument("--report-output", default="artifacts/validation/signal_result_report.json")
+    parser.add_argument("--report-markdown-output", default="artifacts/validation/signal_result_report.md")
+    parser.add_argument("--report-rows-output", default="artifacts/validation/signal_result_rows.csv")
+    parser.add_argument("--history-output", default="artifacts/validation/signal_result_history.csv")
+    parser.add_argument("--previous-history", default=None)
     parser.add_argument("--exceptional-closures", default="config/exceptional_nyse_closures.json")
     args = parser.parse_args()
     calendar = NYSETradingCalendar(exceptional_closures=args.exceptional_closures)
@@ -275,6 +479,16 @@ def main() -> None:
     if args.previous:
         settled = settle_frozen_signals(args.previous, dataset, args.settlement_output)
         print(f"settlement: {settled or 'pending'}")
+        if settled:
+            report, _, _ = write_signal_result_report(
+                settled,
+                args.report_output,
+                args.report_rows_output,
+                args.history_output,
+                args.previous_history,
+            )
+            markdown = write_signal_result_markdown(report, args.report_markdown_output)
+            print(f"result report: {report}, {markdown}")
 
 
 if __name__ == "__main__":
