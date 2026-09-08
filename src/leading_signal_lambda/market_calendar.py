@@ -73,3 +73,13 @@ class NYSETradingCalendar:
             return True
         except ValueError:
             return False
+
+    def next_session(self, value: str | date) -> date:
+        """Return the first regular or exceptional-adjusted XNYS session after value."""
+        day = date.fromisoformat(value) if isinstance(value, str) else value
+        candidate = self._calendar.date_to_session(day, direction="previous")
+        if candidate.date() <= day:
+            candidate = self._calendar.next_session(candidate)
+        while candidate.date() in self._exceptional_closures:
+            candidate = self._calendar.next_session(candidate)
+        return candidate.date()
