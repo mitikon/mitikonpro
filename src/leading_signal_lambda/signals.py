@@ -38,11 +38,27 @@ def build_leading_features(close: pd.DataFrame, volume: pd.DataFrame | None = No
         symbol for symbol in numeric_close.columns if _has_usable_history(numeric_close[symbol])
     )
     numeric_close = numeric_close[usable_close]
-    returns = numeric_close.pct_change(fill_method=None)
+    # The provider returns the union of calendars (NYSE, FX, futures, indices).
+    # Calculate each symbol's return on its own observed sessions so that a US
+    # holiday row created by FX does not make the next NYSE return disappear.
+    returns = pd.DataFrame(
+        {
+            symbol: numeric_close[symbol]
+            .dropna()
+            .pct_change(fill_method=None)
+            .reindex(numeric_close.index)
+            for symbol in numeric_close.columns
+        },
+        index=numeric_close.index,
+    )
     features: dict[str, pd.Series] = {}
     for symbol in numeric_close.columns:
+        observed_returns = returns[symbol].dropna()
         for lag in range(1, 6):
-            features[f"ret_{symbol}_lag{lag}"] = returns[symbol].shift(lag - 1)
+            # Lag by that market's observed sessions, not by union-calendar rows.
+            features[f"ret_{symbol}_lag{lag}"] = observed_returns.shift(lag - 1).reindex(
+                numeric_close.index
+            )
 
     features["spread_smh_qqq"] = returns["SMH"] - returns["QQQ"]
     features["spread_rsp_spy"] = returns["RSP"] - returns["SPY"]
@@ -73,7 +89,12 @@ def build_training_set(
     neutral_band: float = 0.001,
 ) -> tuple[pd.DataFrame, pd.Series, pd.Series]:
     """当日までの特徴と翌営業日リターンを整列し、リーク無しの教師データを作る。"""
-    next_return = target_close.astype(float).pct_change(fill_method=None).shift(-1)
+    observed_target = target_close.astype(float).dropna()
+    # Map each session to the return of the next observed target session. Union
+    # calendar rows (FX-only days and US holidays) must not break the label.
+    next_return = (
+        observed_target.pct_change(fill_method=None).shift(-1).reindex(target_close.index)
+    )
     labels = pd.Series(
         np.select([next_return > neutral_band, next_return < -neutral_band], [1, -1], default=0),
         index=next_return.index,
