@@ -53,8 +53,13 @@ jobs:
           START_DATE: ${{ inputs.start_date || '2015-01-01' }}
         run: |
           previous=$(find artifacts/previous -name forward_signal.json -print -quit 2>/dev/null || true)
+          previous_history=$(find artifacts/previous -name signal_result_history.csv -print -quit 2>/dev/null || true)
           if [ -n "$previous" ]; then
-            leading-lambda-forward --input-dir artifacts/validation/raw --output artifacts/validation/forward_signal.json --previous "$previous"
+            args=(--input-dir artifacts/validation/raw --output artifacts/validation/forward_signal.json --previous "$previous")
+            if [ -n "$previous_history" ]; then
+              args+=(--previous-history "$previous_history")
+            fi
+            leading-lambda-forward "${args[@]}"
           else
             leading-lambda-forward --input-dir artifacts/validation/raw --output artifacts/validation/forward_signal.json
           fi
