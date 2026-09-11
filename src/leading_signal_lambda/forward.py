@@ -18,7 +18,8 @@ from .model import LeadingLambdaClassifier
 from .signals import REQUIRED_SYMBOLS, build_leading_features, build_training_set
 
 
-SCHEMA_VERSION = "market-forward-v3"
+SCHEMA_VERSION = "market-forward-v4"
+TRADE_SELECTION_RULE = "maximum_absolute_predicted_return_v1"
 TARGET_METADATA: dict[str, tuple[str, str]] = {
     "SPY": ("市場ETF", "S&P 500"),
     "QQQ": ("市場ETF", "NASDAQ 100"),
@@ -196,12 +197,43 @@ def generate_forward_signals(
     return records
 
 
+def select_primary_trade(
+    signals: list[FrozenMarketSignal] | list[dict[str, object]],
+) -> dict[str, object]:
+    """Select exactly one trade without using any result information."""
+    if not signals:
+        raise ValueError("at least one frozen signal is required for trade selection")
+    values = [asdict(signal) if isinstance(signal, FrozenMarketSignal) else signal for signal in signals]
+    selected = max(values, key=lambda signal: abs(float(signal["predicted_return"])))
+    predicted_return = float(selected["predicted_return"])
+    position = 1 if predicted_return >= 0.0 else -1
+    return {
+        "selection_rule": TRADE_SELECTION_RULE,
+        "signal_session": selected["signal_session"],
+        "target_session": selected["target_session"],
+        "target": selected["target"],
+        "target_category": selected["target_category"],
+        "target_name": selected["target_name"],
+        "action": "LONG" if position == 1 else "SHORT",
+        "position": position,
+        "predicted_return": predicted_return,
+        "confidence": float(selected["confidence"]),
+        "edge": float(selected["edge"]),
+        "input_sha256": selected["input_sha256"],
+        "status": "PENDING",
+    }
+
+
 def freeze_signals(records: list[FrozenMarketSignal], path: str | Path) -> Path:
     destination = Path(path)
     destination.parent.mkdir(parents=True, exist_ok=True)
     if destination.exists():
         raise FileExistsError(f"refusing to overwrite frozen signal: {destination}")
-    document = {"schema_version": SCHEMA_VERSION, "signals": [asdict(record) for record in records]}
+    document = {
+        "schema_version": SCHEMA_VERSION,
+        "primary_trade": select_primary_trade(records),
+        "signals": [asdict(record) for record in records],
+    }
     destination.write_text(json.dumps(document, ensure_ascii=False, indent=2), encoding="utf-8")
     return destination
 
@@ -211,7 +243,7 @@ def carry_forward_same_session(
     dataset: MarketDataset,
     output_path: str | Path,
 ) -> Path | None:
-    """Preserve the first v3 forecast when the same input session runs again."""
+    """Preserve the first v4 forecast when the same input session runs again."""
     source = Path(previous_path)
     if not source.exists():
         return None
@@ -280,8 +312,46 @@ def settle_frozen_signals(
     destination.parent.mkdir(parents=True, exist_ok=True)
     if destination.exists():
         raise FileExistsError(f"refusing to overwrite settlement: {destination}")
+    primary = document.get("primary_trade") or select_primary_trade(document["signals"])
+    selected_result = next(
+        (row for row in settlements if row["target"] == primary["target"]), None
+    )
+    if selected_result is None:
+        return None
+    position = int(primary["position"])
+    actual_return = float(selected_result["actual_return"])
+    spy_result = next((row for row in settlements if row["target"] == "SPY"), None)
+    spy_return = float(spy_result["actual_return"]) if spy_result else None
+    gross_return = position * actual_return
+    primary_settlement = {
+        **primary,
+        "status": "SETTLED",
+        "actual_return": actual_return,
+        "actual_class": int(selected_result["actual_class"]),
+        "direction_correct": (
+            actual_return > float(selected_result["neutral_band"])
+            if position == 1
+            else actual_return < -float(selected_result["neutral_band"])
+        ),
+        "gross_return_before_cost": gross_return,
+        "spy_return": spy_return,
+        "excess_return_vs_spy_before_cost": (
+            gross_return - spy_return if spy_return is not None else None
+        ),
+        "absolute_divergence_pp": abs(
+            actual_return - float(primary["predicted_return"])
+        ) * 100.0,
+    }
     destination.write_text(
-        json.dumps({"schema_version": SCHEMA_VERSION, "settlements": settlements}, ensure_ascii=False, indent=2),
+        json.dumps(
+            {
+                "schema_version": SCHEMA_VERSION,
+                "primary_trade": primary_settlement,
+                "settlements": settlements,
+            },
+            ensure_ascii=False,
+            indent=2,
+        ),
         encoding="utf-8",
     )
     return destination
@@ -316,6 +386,8 @@ def write_signal_result_report(
     rows_path: str | Path,
     history_path: str | Path,
     previous_history_path: str | Path | None = None,
+    trade_history_path: str | Path | None = None,
+    previous_trade_history_path: str | Path | None = None,
 ) -> tuple[Path, Path, Path]:
     """Create a separate daily/cumulative audit report from settled frozen signals."""
     settlement = json.loads(Path(settlement_path).read_text(encoding="utf-8"))
@@ -346,6 +418,64 @@ def write_signal_result_report(
     ).dropna()
     cumulative_sectors = history[history["target_category"] == "セクターETF"]
     cumulative_other = history[history["target_category"] != "セクターETF"]
+    primary_trade = settlement["primary_trade"]
+
+    def derive_trade(group: pd.DataFrame) -> dict[str, object]:
+        selected = group.loc[
+            pd.to_numeric(group["predicted_return"], errors="coerce").abs().idxmax()
+        ]
+        predicted_return = float(selected["predicted_return"])
+        position = 1 if predicted_return >= 0.0 else -1
+        actual_return = float(selected["actual_return"])
+        spy_rows = group[group["target"] == "SPY"]
+        spy_return = float(spy_rows.iloc[0]["actual_return"]) if not spy_rows.empty else np.nan
+        gross_return = position * actual_return
+        return {
+            "selection_rule": TRADE_SELECTION_RULE,
+            "signal_session": selected["signal_session"],
+            "target_session": selected["target_session"],
+            "target": selected["target"],
+            "target_category": selected["target_category"],
+            "target_name": selected["target_name"],
+            "action": "LONG" if position == 1 else "SHORT",
+            "position": position,
+            "predicted_return": predicted_return,
+            "confidence": float(selected["confidence"]),
+            "edge": float(selected["edge"]),
+            "input_sha256": selected["input_sha256"],
+            "status": "SETTLED",
+            "actual_return": actual_return,
+            "actual_class": int(selected["actual_class"]),
+            "direction_correct": position == int(selected["actual_class"]),
+            "gross_return_before_cost": gross_return,
+            "spy_return": spy_return,
+            "excess_return_vs_spy_before_cost": gross_return - spy_return,
+            "absolute_divergence_pp": abs(actual_return - predicted_return) * 100.0,
+        }
+
+    # Reconstruct earlier selections from frozen prediction rows using the same
+    # outcome-blind rule, so the official loop starts on 2026-09-09 rather than
+    # only after this report format was introduced.
+    derived_trades = [derive_trade(group) for _, group in history.groupby("signal_session")]
+    trade_history = pd.DataFrame(derived_trades)
+    if previous_trade_history_path and Path(previous_trade_history_path).exists():
+        previous_trades = pd.read_csv(previous_trade_history_path)
+        trade_history = pd.concat([previous_trades, trade_history], ignore_index=True, sort=False)
+    trade_history = trade_history.drop_duplicates(
+        subset=["signal_session", "target"], keep="first"
+    ).sort_values(["signal_session", "target"], kind="stable")
+    if trade_history_path:
+        trade_destination = Path(trade_history_path)
+        trade_destination.parent.mkdir(parents=True, exist_ok=True)
+        trade_history.to_csv(trade_destination, index=False, float_format="%.10g")
+
+    trade_correct = _rate(trade_history)
+    cumulative_gross = pd.to_numeric(
+        trade_history["gross_return_before_cost"], errors="coerce"
+    ).fillna(0.0)
+    cumulative_spy = pd.to_numeric(trade_history["spy_return"], errors="coerce").fillna(0.0)
+    compounded_trade = float((1.0 + cumulative_gross).prod() - 1.0)
+    compounded_spy = float((1.0 + cumulative_spy).prod() - 1.0)
 
     def records(frame: pd.DataFrame, count: int = 5) -> list[dict[str, object]]:
         return json.loads(frame.head(count).to_json(orient="records", force_ascii=False))
@@ -369,6 +499,7 @@ def write_signal_result_report(
             "other_etf_direction_accuracy": _rate(other_rows),
             "mean_absolute_divergence_pp": float(divergence.mean()) if len(divergence) else None,
             "median_absolute_divergence_pp": float(divergence.median()) if len(divergence) else None,
+            "primary_trade": primary_trade,
             "results": records(rows, len(rows)),
             "largest_risers": records(risers),
             "largest_fallers": records(fallers),
@@ -386,6 +517,12 @@ def write_signal_result_report(
             "median_absolute_divergence_pp": (
                 float(cumulative_divergence.median()) if len(cumulative_divergence) else None
             ),
+            "primary_trade_count": int(len(trade_history)),
+            "primary_trade_direction_accuracy": trade_correct,
+            "primary_trade_win_rate_before_cost": float(cumulative_gross.gt(0.0).mean()),
+            "primary_trade_compounded_return_before_cost": compounded_trade,
+            "spy_compounded_return": compounded_spy,
+            "primary_trade_excess_vs_spy_before_cost": compounded_trade - compounded_spy,
         },
     }
     report_destination = Path(report_path)
@@ -400,6 +537,7 @@ def write_signal_result_markdown(report_path: str | Path, output_path: str | Pat
     report = json.loads(Path(report_path).read_text(encoding="utf-8"))
     daily = report["daily"]
     cumulative = report["cumulative"]
+    trade = daily["primary_trade"]
 
     def percent(value: float | None) -> str:
         return "—" if value is None else f"{value * 100:.2f}%"
@@ -421,6 +559,20 @@ def write_signal_result_markdown(report_path: str | Path, output_path: str | Pat
     lines = [
         "# 先行シグナル予測λ 正誤・乖離分析レポート",
         "",
+        "## 主判定：前日に選定した単独トレード",
+        "",
+        f"- 選定ETF: {trade['target']} {trade.get('target_name', '')}",
+        f"- 売買方向: {trade['action']}",
+        f"- 予測騰落率: {float(trade['predicted_return']) * 100:.2f}%",
+        f"- 実績騰落率: {float(trade['actual_return']) * 100:.2f}%",
+        f"- 方向判定: {'正解' if trade['direction_correct'] else '不正解'}",
+        f"- 仮想損益（コスト前）: {float(trade['gross_return_before_cost']) * 100:.2f}%",
+        f"- SPY騰落率: {float(trade['spy_return']) * 100:.2f}%",
+        f"- SPY超過成績（コスト前）: {float(trade['excess_return_vs_spy_before_cost']) * 100:.2f}%",
+        f"- 予測乖離: {float(trade['absolute_divergence_pp']):.2f} pp",
+        "",
+        "## 19 ETF補助診断",
+        "",
         f"- 予測基準日: {daily['signal_session']}",
         f"- 結果対象日: {daily['target_session']}",
         f"- 確定銘柄数: {daily['settled_targets']}",
@@ -429,6 +581,8 @@ def write_signal_result_markdown(report_path: str | Path, output_path: str | Pat
         f"- その他ETF方向正解率: {percent(daily['other_etf_direction_accuracy'])}",
         f"- 平均絶対乖離: {daily['mean_absolute_divergence_pp']:.2f} pp" if daily["mean_absolute_divergence_pp"] is not None else "- 平均絶対乖離: —",
         f"- 累積方向正解率: {percent(cumulative['direction_accuracy'])}（{cumulative['settled_predictions']}件）",
+        f"- 単独トレード累積損益（コスト前）: {float(cumulative['primary_trade_compounded_return_before_cost']) * 100:.2f}%（{cumulative['primary_trade_count']}回）",
+        f"- 単独トレード勝率（コスト前）: {percent(cumulative['primary_trade_win_rate_before_cost'])}",
         "",
         "乖離は `abs(実績騰落率 - 予測騰落率)` の％ポイント差です。予測値は発信時点の凍結値で、結果取得後に変更しません。",
         "",
@@ -461,6 +615,8 @@ def main() -> None:
     parser.add_argument("--report-rows-output", default="artifacts/validation/signal_result_rows.csv")
     parser.add_argument("--history-output", default="artifacts/validation/signal_result_history.csv")
     parser.add_argument("--previous-history", default=None)
+    parser.add_argument("--trade-history-output", default="artifacts/validation/selected_trade_history.csv")
+    parser.add_argument("--previous-trade-history", default=None)
     parser.add_argument("--exceptional-closures", default="config/exceptional_nyse_closures.json")
     args = parser.parse_args()
     calendar = NYSETradingCalendar(exceptional_closures=args.exceptional_closures)
@@ -486,6 +642,8 @@ def main() -> None:
                 args.report_rows_output,
                 args.history_output,
                 args.previous_history,
+                args.trade_history_output,
+                args.previous_trade_history,
             )
             markdown = write_signal_result_markdown(report, args.report_markdown_output)
             print(f"result report: {report}, {markdown}")

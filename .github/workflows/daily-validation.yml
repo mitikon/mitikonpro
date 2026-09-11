@@ -54,10 +54,14 @@ jobs:
         run: |
           previous=$(find artifacts/previous -name forward_signal.json -print -quit 2>/dev/null || true)
           previous_history=$(find artifacts/previous -name signal_result_history.csv -print -quit 2>/dev/null || true)
+          previous_trade_history=$(find artifacts/previous -name selected_trade_history.csv -print -quit 2>/dev/null || true)
           if [ -n "$previous" ]; then
             args=(--input-dir artifacts/validation/raw --output artifacts/validation/forward_signal.json --previous "$previous")
             if [ -n "$previous_history" ]; then
               args+=(--previous-history "$previous_history")
+            fi
+            if [ -n "$previous_trade_history" ]; then
+              args+=(--previous-trade-history "$previous_trade_history")
             fi
             leading-lambda-forward "${args[@]}"
           else
