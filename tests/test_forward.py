@@ -10,6 +10,7 @@ from leading_signal_lambda.forward import (
     freeze_signals,
     generate_forward_signals,
     load_dataset,
+    select_primary_trade,
     settle_frozen_signals,
     write_signal_result_markdown,
     write_signal_result_report,
@@ -49,7 +50,21 @@ def test_forward_signal_uses_latest_row_without_known_outcome(tmp_path):
     assert all(record.status == "PENDING" for record in records)
     assert all(np.isfinite(record.predicted_return) for record in records)
     frozen = freeze_signals(records, tmp_path / "forward.json")
-    assert json.loads(frozen.read_text())["signals"][0]["input_sha256"]
+    payload = json.loads(frozen.read_text())
+    assert payload["signals"][0]["input_sha256"]
+    expected = max(records, key=lambda record: abs(record.predicted_return))
+    assert payload["primary_trade"]["target"] == expected.target
+
+
+def test_primary_trade_selection_does_not_use_results():
+    signals = [
+        {"signal_session": "2026-09-09", "target_session": "2026-09-10", "target": "SPY", "target_category": "市場ETF", "target_name": "S&P 500", "predicted_return": 0.01, "confidence": 0.7, "edge": 0.4, "input_sha256": "a"},
+        {"signal_session": "2026-09-09", "target_session": "2026-09-10", "target": "SMH", "target_category": "テーマETF", "target_name": "半導体", "predicted_return": -0.02, "confidence": 0.6, "edge": 0.2, "input_sha256": "a"},
+    ]
+    selected = select_primary_trade(signals)
+    assert selected["target"] == "SMH"
+    assert selected["action"] == "SHORT"
+    assert selected["position"] == -1
 
 
 def test_frozen_signal_cannot_be_overwritten(tmp_path):
@@ -75,6 +90,7 @@ def test_previous_signal_is_settled_when_target_close_arrives(tmp_path):
     assert len(payload["settlements"]) == len(FORWARD_TARGETS)
     assert all(item["status"] == "SETTLED" for item in payload["settlements"])
     assert all(item["absolute_divergence_pp"] >= 0 for item in payload["settlements"])
+    assert payload["primary_trade"]["status"] == "SETTLED"
 
 
 def test_separate_result_report_ranks_movers_and_deduplicates_history(tmp_path):
@@ -88,10 +104,14 @@ def test_separate_result_report_ranks_movers_and_deduplicates_history(tmp_path):
         tmp_path / "report.json",
         tmp_path / "rows.csv",
         tmp_path / "history.csv",
+        trade_history_path=tmp_path / "trade_history.csv",
     )
     report = json.loads(report_path.read_text())
     rows = pd.read_csv(rows_path)
     assert report["daily"]["settled_targets"] == len(FORWARD_TARGETS)
+    assert report["daily"]["primary_trade"]["target"]
+    assert report["cumulative"]["primary_trade_count"] == 1
+    assert len(pd.read_csv(tmp_path / "trade_history.csv")) == 1
     assert len(report["daily"]["results"]) == len(FORWARD_TARGETS)
     assert np.isclose(
         report["daily"]["largest_risers"][0]["actual_return"], rows["actual_return"].max()
@@ -112,6 +132,7 @@ def test_separate_result_report_ranks_movers_and_deduplicates_history(tmp_path):
     assert second_report["cumulative"]["direction_accuracy"] == report["daily"]["direction_accuracy"]
     markdown = write_signal_result_markdown(report_path, tmp_path / "report.md")
     assert "実績上昇上位" in markdown.read_text()
+    assert "主判定：前日に選定した単独トレード" in markdown.read_text()
 
 
 def test_loads_already_collected_csv_without_second_provider_call(tmp_path):
