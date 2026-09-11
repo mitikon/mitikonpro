@@ -18,8 +18,9 @@ from .model import LeadingLambdaClassifier
 from .signals import REQUIRED_SYMBOLS, build_leading_features, build_training_set
 
 
-SCHEMA_VERSION = "market-forward-v4"
+SCHEMA_VERSION = "market-forward-v5"
 TRADE_SELECTION_RULE = "maximum_absolute_predicted_return_v1"
+EXTREME_SELECTION_RULE = "predicted_return_extremes_v1"
 TARGET_METADATA: dict[str, tuple[str, str]] = {
     "SPY": ("市場ETF", "S&P 500"),
     "QQQ": ("市場ETF", "NASDAQ 100"),
@@ -224,6 +225,38 @@ def select_primary_trade(
     }
 
 
+def select_extreme_forecasts(
+    signals: list[FrozenMarketSignal] | list[dict[str, object]],
+) -> dict[str, dict[str, object]]:
+    """Freeze one maximum-upside and one maximum-downside ETF forecast."""
+    if not signals:
+        raise ValueError("at least one frozen signal is required for extreme selection")
+    values = [asdict(signal) if isinstance(signal, FrozenMarketSignal) else signal for signal in signals]
+
+    def selected(signal: dict[str, object], side: str) -> dict[str, object]:
+        predicted_return = float(signal["predicted_return"])
+        return {
+            "selection_rule": EXTREME_SELECTION_RULE,
+            "side": side,
+            "signal_session": signal["signal_session"],
+            "target_session": signal["target_session"],
+            "target": signal["target"],
+            "target_category": signal["target_category"],
+            "target_name": signal["target_name"],
+            "predicted_return": predicted_return,
+            "direction_signal_present": predicted_return > 0.0 if side == "UPSIDE" else predicted_return < 0.0,
+            "confidence": float(signal["confidence"]),
+            "edge": float(signal["edge"]),
+            "input_sha256": signal["input_sha256"],
+            "status": "PENDING",
+        }
+
+    return {
+        "upside": selected(max(values, key=lambda signal: float(signal["predicted_return"])), "UPSIDE"),
+        "downside": selected(min(values, key=lambda signal: float(signal["predicted_return"])), "DOWNSIDE"),
+    }
+
+
 def freeze_signals(records: list[FrozenMarketSignal], path: str | Path) -> Path:
     destination = Path(path)
     destination.parent.mkdir(parents=True, exist_ok=True)
@@ -232,6 +265,7 @@ def freeze_signals(records: list[FrozenMarketSignal], path: str | Path) -> Path:
     document = {
         "schema_version": SCHEMA_VERSION,
         "primary_trade": select_primary_trade(records),
+        "extreme_forecasts": select_extreme_forecasts(records),
         "signals": [asdict(record) for record in records],
     }
     destination.write_text(json.dumps(document, ensure_ascii=False, indent=2), encoding="utf-8")
@@ -243,17 +277,18 @@ def carry_forward_same_session(
     dataset: MarketDataset,
     output_path: str | Path,
 ) -> Path | None:
-    """Preserve the first v4 forecast when the same input session runs again."""
+    """Preserve the first compatible forecast when the same input session runs again."""
     source = Path(previous_path)
     if not source.exists():
         return None
     document = json.loads(source.read_text(encoding="utf-8"))
     signals = document.get("signals", [])
     current_session = _signal_session(dataset).date().isoformat()
+    compatible_versions = {"market-forward-v4", SCHEMA_VERSION}
     if (
-        document.get("schema_version") != SCHEMA_VERSION
+        document.get("schema_version") not in compatible_versions
         or not signals
-        or any(signal.get("schema_version") != SCHEMA_VERSION for signal in signals)
+        or any(signal.get("schema_version") not in compatible_versions for signal in signals)
         or any(signal.get("signal_session") != current_session for signal in signals)
     ):
         return None
@@ -342,11 +377,48 @@ def settle_frozen_signals(
             actual_return - float(primary["predicted_return"])
         ) * 100.0,
     }
+    frozen_extremes = document.get("extreme_forecasts") or select_extreme_forecasts(
+        document["signals"]
+    )
+
+    def settle_extreme(side: str) -> dict[str, object]:
+        forecast = frozen_extremes[side]
+        reverse = side == "upside"
+        ranked = sorted(
+            settlements, key=lambda row: float(row["actual_return"]), reverse=reverse
+        )
+        selected_row = next(row for row in settlements if row["target"] == forecast["target"])
+        actual_extreme = ranked[0]
+        predicted_return = float(forecast["predicted_return"])
+        actual_return = float(selected_row["actual_return"])
+        expected_class = 1 if side == "upside" else -1
+        return {
+            **forecast,
+            "status": "SETTLED",
+            "expected_class": expected_class,
+            "selected_actual_return": actual_return,
+            "selected_actual_class": int(selected_row["actual_class"]),
+            "direction_correct": actual_return > 0.0 if side == "upside" else actual_return < 0.0,
+            "selected_actual_rank": next(
+                rank for rank, row in enumerate(ranked, start=1) if row["target"] == forecast["target"]
+            ),
+            "actual_extreme_target": actual_extreme["target"],
+            "actual_extreme_name": actual_extreme["target_name"],
+            "actual_extreme_return": float(actual_extreme["actual_return"]),
+            "exact_target_hit": forecast["target"] == actual_extreme["target"],
+            "absolute_divergence_pp": abs(actual_return - predicted_return) * 100.0,
+        }
+
+    extreme_settlements = {
+        "upside": settle_extreme("upside"),
+        "downside": settle_extreme("downside"),
+    }
     destination.write_text(
         json.dumps(
             {
                 "schema_version": SCHEMA_VERSION,
                 "primary_trade": primary_settlement,
+                "extreme_forecasts": extreme_settlements,
                 "settlements": settlements,
             },
             ensure_ascii=False,
@@ -420,6 +492,43 @@ def write_signal_result_report(
     cumulative_other = history[history["target_category"] != "セクターETF"]
     primary_trade = settlement["primary_trade"]
 
+    def derive_extremes(group: pd.DataFrame) -> dict[str, dict[str, object]]:
+        results: dict[str, dict[str, object]] = {}
+        for side, ascending in (("upside", False), ("downside", True)):
+            predicted = group.sort_values("predicted_return", ascending=ascending).iloc[0]
+            actual_ranked = group.sort_values("actual_return", ascending=ascending)
+            actual = actual_ranked.iloc[0]
+            results[side] = {
+                "target": predicted["target"],
+                "target_name": predicted["target_name"],
+                "predicted_return": float(predicted["predicted_return"]),
+                "selected_actual_return": float(predicted["actual_return"]),
+                "selected_actual_rank": int(
+                    list(actual_ranked["target"]).index(predicted["target"]) + 1
+                ),
+                "actual_extreme_target": actual["target"],
+                "actual_extreme_name": actual["target_name"],
+                "actual_extreme_return": float(actual["actual_return"]),
+                "direction_correct": (
+                    float(predicted["actual_return"]) > 0.0
+                    if side == "upside"
+                    else float(predicted["actual_return"]) < 0.0
+                ),
+                "exact_target_hit": predicted["target"] == actual["target"],
+                "direction_signal_present": (
+                    float(predicted["predicted_return"]) > 0.0
+                    if side == "upside"
+                    else float(predicted["predicted_return"]) < 0.0
+                ),
+                "absolute_divergence_pp": abs(
+                    float(predicted["actual_return"]) - float(predicted["predicted_return"])
+                ) * 100.0,
+            }
+        return results
+
+    daily_extremes = settlement.get("extreme_forecasts") or derive_extremes(rows)
+    historical_extremes = [derive_extremes(group) for _, group in history.groupby("signal_session")]
+
     def derive_trade(group: pd.DataFrame) -> dict[str, object]:
         selected = group.loc[
             pd.to_numeric(group["predicted_return"], errors="coerce").abs().idxmax()
@@ -484,11 +593,13 @@ def write_signal_result_report(
     fallers = rows.sort_values("actual_return", ascending=True)
     misses = rows.sort_values("absolute_divergence_pp", ascending=False, na_position="last")
     report = {
-        "schema_version": "signal-result-report-v1",
+        "schema_version": "signal-result-report-v2",
         "definition": {
             "direction_correct": "predicted_classとactual_classの一致",
             "absolute_divergence_pp": "abs(actual_return - predicted_return) * 100（％ポイント）",
             "no_lookahead": "予測値は凍結済みforward_signalから取得し、結果で再計算しない",
+            "extreme_target_hit": "予測上昇1位・下落1位のETF銘柄が実績1位と一致",
+            "extreme_direction_correct": "上昇候補は実績騰落率が正、下落候補は実績騰落率が負",
         },
         "daily": {
             "signal_session": str(rows["signal_session"].iloc[0]),
@@ -500,6 +611,7 @@ def write_signal_result_report(
             "mean_absolute_divergence_pp": float(divergence.mean()) if len(divergence) else None,
             "median_absolute_divergence_pp": float(divergence.median()) if len(divergence) else None,
             "primary_trade": primary_trade,
+            "extreme_forecasts": daily_extremes,
             "results": records(rows, len(rows)),
             "largest_risers": records(risers),
             "largest_fallers": records(fallers),
@@ -523,6 +635,18 @@ def write_signal_result_report(
             "primary_trade_compounded_return_before_cost": compounded_trade,
             "spy_compounded_return": compounded_spy,
             "primary_trade_excess_vs_spy_before_cost": compounded_trade - compounded_spy,
+            "upside_top1_hit_rate": float(
+                np.mean([value["upside"]["exact_target_hit"] for value in historical_extremes])
+            ),
+            "downside_top1_hit_rate": float(
+                np.mean([value["downside"]["exact_target_hit"] for value in historical_extremes])
+            ),
+            "upside_direction_accuracy": float(
+                np.mean([value["upside"]["direction_correct"] for value in historical_extremes])
+            ),
+            "downside_direction_accuracy": float(
+                np.mean([value["downside"]["direction_correct"] for value in historical_extremes])
+            ),
         },
     }
     report_destination = Path(report_path)
@@ -538,6 +662,7 @@ def write_signal_result_markdown(report_path: str | Path, output_path: str | Pat
     daily = report["daily"]
     cumulative = report["cumulative"]
     trade = daily["primary_trade"]
+    extremes = daily["extreme_forecasts"]
 
     def percent(value: float | None) -> str:
         return "—" if value is None else f"{value * 100:.2f}%"
@@ -558,6 +683,21 @@ def write_signal_result_markdown(report_path: str | Path, output_path: str | Pat
 
     lines = [
         "# 先行シグナル予測λ 正誤・乖離分析レポート",
+        "",
+        "## 主検証：上昇1位・下落1位の事前選出",
+        "",
+        "|区分|事前選出ETF|予測騰落率|実績騰落率|実績順位|実績1位ETF|銘柄的中|方向正誤|",
+        "|---|---|---:|---:|---:|---|---|---|",
+        *[
+            f"|{'上昇1位' if side == 'upside' else '下落1位'}|{value['target']} {value.get('target_name', '')}|"
+            f"{float(value['predicted_return']) * 100:.2f}%|{float(value['selected_actual_return']) * 100:.2f}%|"
+            f"{value['selected_actual_rank']}位|{value['actual_extreme_target']} {value.get('actual_extreme_name', '')}|"
+            f"{'的中' if value['exact_target_hit'] else '不的中'}|{'正解' if value['direction_correct'] else '不正解'}|"
+            for side, value in extremes.items()
+        ],
+        "",
+        f"- 累積上昇1位銘柄的中率: {percent(cumulative['upside_top1_hit_rate'])}",
+        f"- 累積下落1位銘柄的中率: {percent(cumulative['downside_top1_hit_rate'])}",
         "",
         "## 主判定：前日に選定した単独トレード",
         "",
