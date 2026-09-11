@@ -11,6 +11,7 @@ from leading_signal_lambda.forward import (
     generate_forward_signals,
     load_dataset,
     select_primary_trade,
+    select_extreme_forecasts,
     settle_frozen_signals,
     write_signal_result_markdown,
     write_signal_result_report,
@@ -54,6 +55,12 @@ def test_forward_signal_uses_latest_row_without_known_outcome(tmp_path):
     assert payload["signals"][0]["input_sha256"]
     expected = max(records, key=lambda record: abs(record.predicted_return))
     assert payload["primary_trade"]["target"] == expected.target
+    assert payload["extreme_forecasts"]["upside"]["target"] == max(
+        records, key=lambda record: record.predicted_return
+    ).target
+    assert payload["extreme_forecasts"]["downside"]["target"] == min(
+        records, key=lambda record: record.predicted_return
+    ).target
 
 
 def test_primary_trade_selection_does_not_use_results():
@@ -65,6 +72,9 @@ def test_primary_trade_selection_does_not_use_results():
     assert selected["target"] == "SMH"
     assert selected["action"] == "SHORT"
     assert selected["position"] == -1
+    extremes = select_extreme_forecasts(signals)
+    assert extremes["upside"]["target"] == "SPY"
+    assert extremes["downside"]["target"] == "SMH"
 
 
 def test_frozen_signal_cannot_be_overwritten(tmp_path):
@@ -91,6 +101,10 @@ def test_previous_signal_is_settled_when_target_close_arrives(tmp_path):
     assert all(item["status"] == "SETTLED" for item in payload["settlements"])
     assert all(item["absolute_divergence_pp"] >= 0 for item in payload["settlements"])
     assert payload["primary_trade"]["status"] == "SETTLED"
+    assert set(payload["extreme_forecasts"]) == {"upside", "downside"}
+    assert all(
+        value["selected_actual_rank"] >= 1 for value in payload["extreme_forecasts"].values()
+    )
 
 
 def test_separate_result_report_ranks_movers_and_deduplicates_history(tmp_path):
@@ -110,6 +124,9 @@ def test_separate_result_report_ranks_movers_and_deduplicates_history(tmp_path):
     rows = pd.read_csv(rows_path)
     assert report["daily"]["settled_targets"] == len(FORWARD_TARGETS)
     assert report["daily"]["primary_trade"]["target"]
+    assert set(report["daily"]["extreme_forecasts"]) == {"upside", "downside"}
+    assert 0.0 <= report["cumulative"]["upside_top1_hit_rate"] <= 1.0
+    assert 0.0 <= report["cumulative"]["downside_top1_hit_rate"] <= 1.0
     assert report["cumulative"]["primary_trade_count"] == 1
     assert len(pd.read_csv(tmp_path / "trade_history.csv")) == 1
     assert len(report["daily"]["results"]) == len(FORWARD_TARGETS)
@@ -133,6 +150,7 @@ def test_separate_result_report_ranks_movers_and_deduplicates_history(tmp_path):
     markdown = write_signal_result_markdown(report_path, tmp_path / "report.md")
     assert "実績上昇上位" in markdown.read_text()
     assert "主判定：前日に選定した単独トレード" in markdown.read_text()
+    assert "主検証：上昇1位・下落1位の事前選出" in markdown.read_text()
 
 
 def test_loads_already_collected_csv_without_second_provider_call(tmp_path):
@@ -152,5 +170,22 @@ def test_same_session_carries_first_signal_without_recalculation(tmp_path):
     )
     previous = freeze_signals(records, tmp_path / "previous.json")
     carried = carry_forward_same_session(previous, dataset, tmp_path / "current.json")
+    assert carried is not None
+    assert carried.read_bytes() == previous.read_bytes()
+
+
+def test_same_session_carries_v4_signal_without_recalculation(tmp_path):
+    dataset = sample_dataset()
+    records = generate_forward_signals(dataset, FakeCalendar())
+    previous = freeze_signals(records, tmp_path / "previous.json")
+    payload = json.loads(previous.read_text())
+    payload["schema_version"] = "market-forward-v4"
+    payload.pop("extreme_forecasts")
+    for signal in payload["signals"]:
+        signal["schema_version"] = "market-forward-v4"
+    previous.write_text(json.dumps(payload), encoding="utf-8")
+
+    carried = carry_forward_same_session(previous, dataset, tmp_path / "current.json")
+
     assert carried is not None
     assert carried.read_bytes() == previous.read_bytes()
