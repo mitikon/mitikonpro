@@ -80,7 +80,13 @@ class DailyMarketCollector:
         missing = sorted(symbol for symbol in required if symbol not in close or close[symbol].dropna().empty)
         if missing:
             raise RuntimeError(f"required daily series missing: {missing}")
-        integrity_errors = validate_market_frames(close, volume, required_symbols=tuple(sorted(required)))
+        integrity_errors = validate_market_frames(
+            close,
+            volume,
+            required_symbols=tuple(sorted(required)),
+            # WTI先物は2020年に負値、短期金利指数はゼロ値の実績がある。
+            allow_non_positive_symbols=("OIL", "IRX"),
+        )
         if integrity_errors:
             raise RuntimeError(f"maintenance RSI rejected provider data: {list(integrity_errors)}")
         # 欠損は可視化したまま保存する。将来値によるbackfillはしない。

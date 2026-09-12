@@ -143,6 +143,7 @@ def validate_market_frames(
     volume: pd.DataFrame,
     *,
     required_symbols: Sequence[str],
+    allow_non_positive_symbols: Sequence[str] = (),
 ) -> tuple[str, ...]:
     """Return blocking reasons for poisoned, stale, or malformed market frames."""
     reasons: list[str] = []
@@ -162,7 +163,9 @@ def validate_market_frames(
     volume_values = volume.apply(pd.to_numeric, errors="coerce").to_numpy(dtype=float)
     if np.isinf(close_values).any() or np.isinf(volume_values).any():
         reasons.append("infinite market value detected")
-    finite_close = close_values[np.isfinite(close_values)]
+    protected_close = close.drop(columns=list(allow_non_positive_symbols), errors="ignore")
+    protected_values = protected_close.apply(pd.to_numeric, errors="coerce").to_numpy(dtype=float)
+    finite_close = protected_values[np.isfinite(protected_values)]
     if finite_close.size and (finite_close <= 0.0).any():
         reasons.append("non-positive close detected")
     finite_volume = volume_values[np.isfinite(volume_values)]

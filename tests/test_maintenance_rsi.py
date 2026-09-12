@@ -96,3 +96,16 @@ def test_market_frame_poisoning_is_blocked():
     assert any("QQQ" in reason for reason in reasons)
     assert "non-positive close detected" in reasons
     assert "negative volume detected" in reasons
+
+
+def test_documented_negative_futures_price_can_be_allow_listed():
+    index = pd.to_datetime(["2020-04-20"])
+    close = pd.DataFrame({"SPY": [281.59], "OIL": [-37.63]}, index=index)
+    volume = pd.DataFrame({"SPY": [100.0], "OIL": [100.0]}, index=index)
+    reasons = validate_market_frames(
+        close,
+        volume,
+        required_symbols=("SPY",),
+        allow_non_positive_symbols=("OIL",),
+    )
+    assert reasons == ()
