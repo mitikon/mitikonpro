@@ -2,6 +2,7 @@
 
 from .model import LeadingLambdaClassifier, Prediction
 from .signals import build_leading_features, build_training_set
+from .rsi import RSI_FEATURE_VERSION, RSI_PERIODS, build_rsi_features, calculate_rsi
 from .validation import WalkForwardResult, walk_forward_validate
 from .collector import DailyMarketCollector, MarketDataset, DEFAULT_UNIVERSE
 from .paper_backtest import PaperBacktestResult, run_paper_backtest
@@ -13,6 +14,10 @@ __all__ = [
     "WalkForwardResult",
     "build_leading_features",
     "build_training_set",
+    "RSI_FEATURE_VERSION",
+    "RSI_PERIODS",
+    "build_rsi_features",
+    "calculate_rsi",
     "walk_forward_validate",
     "DailyMarketCollector",
     "MarketDataset",
