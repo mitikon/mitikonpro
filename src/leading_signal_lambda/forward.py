@@ -8,6 +8,7 @@ import json
 from dataclasses import asdict, dataclass
 from datetime import date
 from pathlib import Path
+from typing import Sequence
 
 import numpy as np
 import pandas as pd
@@ -452,14 +453,48 @@ def _rate(frame: pd.DataFrame, column: str = "direction_correct") -> float | Non
     return float(normalized.mean())
 
 
+def _history_paths(
+    value: str | Path | Sequence[str | Path] | None,
+) -> list[Path]:
+    if value is None:
+        return []
+    if isinstance(value, (str, Path)):
+        return [Path(value)]
+    return [Path(path) for path in value]
+
+
+def carry_forward_histories(
+    previous_paths: str | Path | Sequence[str | Path] | None,
+    output_path: str | Path,
+    *,
+    deduplicate_by: list[str],
+    sort_by: list[str],
+) -> Path | None:
+    """Carry cumulative CSV history through runs that have no new settlement."""
+    frames = [
+        pd.read_csv(path)
+        for path in _history_paths(previous_paths)
+        if path.exists()
+    ]
+    if not frames:
+        return None
+    history = pd.concat(frames, ignore_index=True, sort=False)
+    history = history.drop_duplicates(subset=deduplicate_by, keep="first")
+    history = history.sort_values(sort_by, kind="stable")
+    destination = Path(output_path)
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    history.to_csv(destination, index=False, float_format="%.10g")
+    return destination
+
+
 def write_signal_result_report(
     settlement_path: str | Path,
     report_path: str | Path,
     rows_path: str | Path,
     history_path: str | Path,
-    previous_history_path: str | Path | None = None,
+    previous_history_path: str | Path | Sequence[str | Path] | None = None,
     trade_history_path: str | Path | None = None,
-    previous_trade_history_path: str | Path | None = None,
+    previous_trade_history_path: str | Path | Sequence[str | Path] | None = None,
 ) -> tuple[Path, Path, Path]:
     """Create a separate daily/cumulative audit report from settled frozen signals."""
     settlement = json.loads(Path(settlement_path).read_text(encoding="utf-8"))
@@ -473,9 +508,13 @@ def write_signal_result_report(
     rows.to_csv(rows_destination, index=False, float_format="%.10g")
 
     history = rows.copy()
-    if previous_history_path and Path(previous_history_path).exists():
-        previous = pd.read_csv(previous_history_path)
-        history = pd.concat([previous, rows], ignore_index=True, sort=False)
+    previous_histories = [
+        pd.read_csv(path)
+        for path in _history_paths(previous_history_path)
+        if path.exists()
+    ]
+    if previous_histories:
+        history = pd.concat([*previous_histories, rows], ignore_index=True, sort=False)
     history = history.drop_duplicates(subset=["signal_session", "target"], keep="first")
     history = history.sort_values(["signal_session", "target"], kind="stable")
     history_destination = Path(history_path)
@@ -567,11 +606,17 @@ def write_signal_result_report(
     # only after this report format was introduced.
     derived_trades = [derive_trade(group) for _, group in history.groupby("signal_session")]
     trade_history = pd.DataFrame(derived_trades)
-    if previous_trade_history_path and Path(previous_trade_history_path).exists():
-        previous_trades = pd.read_csv(previous_trade_history_path)
-        trade_history = pd.concat([previous_trades, trade_history], ignore_index=True, sort=False)
+    previous_trade_histories = [
+        pd.read_csv(path)
+        for path in _history_paths(previous_trade_history_path)
+        if path.exists()
+    ]
+    if previous_trade_histories:
+        trade_history = pd.concat(
+            [*previous_trade_histories, trade_history], ignore_index=True, sort=False
+        )
     trade_history = trade_history.drop_duplicates(
-        subset=["signal_session", "target"], keep="first"
+        subset=["signal_session"], keep="first"
     ).sort_values(["signal_session", "target"], kind="stable")
     if trade_history_path:
         trade_destination = Path(trade_history_path)
@@ -754,9 +799,9 @@ def main() -> None:
     parser.add_argument("--report-markdown-output", default="artifacts/validation/signal_result_report.md")
     parser.add_argument("--report-rows-output", default="artifacts/validation/signal_result_rows.csv")
     parser.add_argument("--history-output", default="artifacts/validation/signal_result_history.csv")
-    parser.add_argument("--previous-history", default=None)
+    parser.add_argument("--previous-history", action="append", default=[])
     parser.add_argument("--trade-history-output", default="artifacts/validation/selected_trade_history.csv")
-    parser.add_argument("--previous-trade-history", default=None)
+    parser.add_argument("--previous-trade-history", action="append", default=[])
     parser.add_argument("--exceptional-closures", default="config/exceptional_nyse_closures.json")
     args = parser.parse_args()
     calendar = NYSETradingCalendar(exceptional_closures=args.exceptional_closures)
@@ -787,6 +832,23 @@ def main() -> None:
             )
             markdown = write_signal_result_markdown(report, args.report_markdown_output)
             print(f"result report: {report}, {markdown}")
+        else:
+            carried_history = carry_forward_histories(
+                args.previous_history,
+                args.history_output,
+                deduplicate_by=["signal_session", "target"],
+                sort_by=["signal_session", "target"],
+            )
+            carried_trades = carry_forward_histories(
+                args.previous_trade_history,
+                args.trade_history_output,
+                deduplicate_by=["signal_session"],
+                sort_by=["signal_session", "target"],
+            )
+            print(
+                "cumulative history: "
+                f"{carried_history or 'none'}, {carried_trades or 'none'}"
+            )
 
 
 if __name__ == "__main__":
