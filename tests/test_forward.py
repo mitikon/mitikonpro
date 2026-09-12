@@ -6,6 +6,7 @@ import pandas as pd
 from leading_signal_lambda.collector import MarketDataset
 from leading_signal_lambda.forward import (
     FORWARD_TARGETS,
+    carry_forward_histories,
     carry_forward_same_session,
     freeze_signals,
     generate_forward_signals,
@@ -189,3 +190,47 @@ def test_same_session_carries_v4_signal_without_recalculation(tmp_path):
 
     assert carried is not None
     assert carried.read_bytes() == previous.read_bytes()
+
+
+def test_cumulative_histories_survive_a_run_without_settlement(tmp_path):
+    first = pd.DataFrame(
+        [
+            {"signal_session": "2026-09-08", "target": "SPY", "actual_return": 0.01},
+            {"signal_session": "2026-09-08", "target": "QQQ", "actual_return": 0.02},
+        ]
+    )
+    second = pd.DataFrame(
+        [
+            {"signal_session": "2026-09-08", "target": "SPY", "actual_return": 0.01},
+            {"signal_session": "2026-09-09", "target": "SPY", "actual_return": -0.01},
+        ]
+    )
+    first_path = tmp_path / "first.csv"
+    second_path = tmp_path / "second.csv"
+    output = tmp_path / "carried.csv"
+    first.to_csv(first_path, index=False)
+    second.to_csv(second_path, index=False)
+
+    carried = carry_forward_histories(
+        [first_path, second_path],
+        output,
+        deduplicate_by=["signal_session", "target"],
+        sort_by=["signal_session", "target"],
+    )
+
+    assert carried == output
+    rows = pd.read_csv(output)
+    assert len(rows) == 3
+    assert set(rows["signal_session"]) == {"2026-09-08", "2026-09-09"}
+
+    trade_output = tmp_path / "trades.csv"
+    carried_trades = carry_forward_histories(
+        [first_path, second_path],
+        trade_output,
+        deduplicate_by=["signal_session"],
+        sort_by=["signal_session", "target"],
+    )
+    assert carried_trades == trade_output
+    trade_rows = pd.read_csv(trade_output)
+    assert len(trade_rows) == 2
+    assert trade_rows["signal_session"].is_unique

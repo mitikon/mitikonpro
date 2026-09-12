@@ -39,30 +39,39 @@ jobs:
         env:
           START_DATE: ${{ inputs.start_date || '2015-01-01' }}
         run: leading-lambda-validate --start "$START_DATE" --output artifacts/validation
-      - name: Download previous frozen signal
+      - name: Download previous frozen signal and cumulative histories
         continue-on-error: true
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          previous_run=$(gh api "repos/${GITHUB_REPOSITORY}/actions/workflows/daily-validation.yml/runs?status=success&per_page=10" --jq ".workflow_runs | map(select(.id != ${GITHUB_RUN_ID})) | first | .id")
-          if [ -n "$previous_run" ] && [ "$previous_run" != "null" ]; then
-            gh run download "$previous_run" --repo "$GITHUB_REPOSITORY" --pattern "leading-lambda-validation-*" --dir artifacts/previous
+          mkdir -p artifacts/previous/latest artifacts/history-sources
+          mapfile -t previous_runs < <(
+            gh api "repos/${GITHUB_REPOSITORY}/actions/workflows/daily-validation.yml/runs?status=success&per_page=30" \
+              --jq ".workflow_runs | map(select(.id != ${GITHUB_RUN_ID})) | .[].id"
+          )
+          if [ "${#previous_runs[@]}" -gt 0 ]; then
+            gh run download "${previous_runs[0]}" --repo "$GITHUB_REPOSITORY" \
+              --pattern "leading-lambda-validation-*" --dir artifacts/previous/latest || true
           fi
+          for run_id in "${previous_runs[@]}"; do
+            gh run download "$run_id" --repo "$GITHUB_REPOSITORY" \
+              --pattern "leading-lambda-validation-*" --dir "artifacts/history-sources/$run_id" || true
+          done
       - name: Freeze next-session signals
         env:
           START_DATE: ${{ inputs.start_date || '2015-01-01' }}
         run: |
-          previous=$(find artifacts/previous -name forward_signal.json -print -quit 2>/dev/null || true)
-          previous_history=$(find artifacts/previous -name signal_result_history.csv -print -quit 2>/dev/null || true)
-          previous_trade_history=$(find artifacts/previous -name selected_trade_history.csv -print -quit 2>/dev/null || true)
+          previous=$(find artifacts/previous/latest -name forward_signal.json -print -quit 2>/dev/null || true)
+          mapfile -t previous_histories < <(find artifacts/history-sources -name signal_result_history.csv -print 2>/dev/null | sort)
+          mapfile -t previous_trade_histories < <(find artifacts/history-sources -name selected_trade_history.csv -print 2>/dev/null | sort)
           if [ -n "$previous" ]; then
             args=(--input-dir artifacts/validation/raw --output artifacts/validation/forward_signal.json --previous "$previous")
-            if [ -n "$previous_history" ]; then
-              args+=(--previous-history "$previous_history")
-            fi
-            if [ -n "$previous_trade_history" ]; then
-              args+=(--previous-trade-history "$previous_trade_history")
-            fi
+            for history in "${previous_histories[@]}"; do
+              args+=(--previous-history "$history")
+            done
+            for history in "${previous_trade_histories[@]}"; do
+              args+=(--previous-trade-history "$history")
+            done
             leading-lambda-forward "${args[@]}"
           else
             leading-lambda-forward --input-dir artifacts/validation/raw --output artifacts/validation/forward_signal.json
