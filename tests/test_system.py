@@ -179,6 +179,17 @@ def test_collector_rejects_missing_required_series():
         raise AssertionError("missing required series must be rejected")
 
 
+def test_collector_blocks_poisoned_provider_values():
+    index = pd.date_range("2024-01-02", periods=2)
+    tickers = ["SPY", "QQQ", "RSP", "SMH", "HYG", "LQD", "XLY", "XLP"]
+    columns = pd.MultiIndex.from_product([["Adj Close", "Volume"], tickers])
+    raw = pd.DataFrame(1.0, index=index, columns=columns)
+    raw.loc[index[-1], ("Adj Close", "SPY")] = np.inf
+    collector = DailyMarketCollector(universe={ticker: ticker for ticker in tickers}, downloader=lambda **kwargs: raw)
+    with pytest.raises(RuntimeError, match="maintenance RSI rejected provider data"):
+        collector.collect("2024-01-02", "2024-01-05")
+
+
 def test_validation_report_compares_strategy_and_benchmark(tmp_path):
     close, volume = sample_market(760)
     report = validate_target(close, volume, "SPY", tmp_path, train_size=252)
