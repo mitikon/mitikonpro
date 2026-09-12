@@ -51,6 +51,8 @@ def test_forward_signal_uses_latest_row_without_known_outcome(tmp_path):
     assert all(record.excluded_feature_count >= 0 for record in records)
     assert all(record.status == "PENDING" for record in records)
     assert all(np.isfinite(record.predicted_return) for record in records)
+    assert all(record.rsi_feature_version == "rsi-self-learning-v1" for record in records)
+    assert all(record.rsi_periods == (5, 7, 14, 21) for record in records)
     frozen = freeze_signals(records, tmp_path / "forward.json")
     payload = json.loads(frozen.read_text())
     assert payload["signals"][0]["input_sha256"]
