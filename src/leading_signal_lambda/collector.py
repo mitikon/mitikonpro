@@ -7,6 +7,8 @@ from typing import Callable
 
 import pandas as pd
 
+from maintenance_rsi import validate_market_frames
+
 
 # 無料の日次価格ソースで取得できる範囲。記号名は内部で固定して特徴量側と共有する。
 DEFAULT_UNIVERSE: dict[str, str] = {
@@ -72,14 +74,23 @@ class DailyMarketCollector:
             raise RuntimeError("daily data provider returned no rows")
         close = self._extract(raw, "Adj Close", fallback="Close")
         volume = self._extract(raw, "Volume", allow_missing=True)
-        close = self._rename_and_bound(close, end_ts)
-        volume = self._rename_and_bound(volume, end_ts).reindex(close.index)
+        close = self._rename_and_bound(close, end_ts).sort_index()
+        volume = self._rename_and_bound(volume, end_ts).reindex(close.index).sort_index()
         required = {"SPY", "QQQ", "RSP", "SMH", "HYG", "LQD", "XLY", "XLP"}
         missing = sorted(symbol for symbol in required if symbol not in close or close[symbol].dropna().empty)
         if missing:
             raise RuntimeError(f"required daily series missing: {missing}")
+        integrity_errors = validate_market_frames(
+            close,
+            volume,
+            required_symbols=tuple(sorted(required)),
+            # WTI先物は2020年に負値、短期金利指数はゼロ値の実績がある。
+            allow_non_positive_symbols=("OIL", "IRX"),
+        )
+        if integrity_errors:
+            raise RuntimeError(f"maintenance RSI rejected provider data: {list(integrity_errors)}")
         # 欠損は可視化したまま保存する。将来値によるbackfillはしない。
-        return MarketDataset(close.sort_index(), volume.sort_index())
+        return MarketDataset(close, volume)
 
     def _rename_and_bound(self, frame: pd.DataFrame, end_ts: pd.Timestamp) -> pd.DataFrame:
         reverse = {ticker: name for name, ticker in self.universe.items()}
