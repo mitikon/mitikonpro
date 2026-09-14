@@ -3,6 +3,21 @@
 from .model import LeadingLambdaClassifier, Prediction
 from .signals import build_leading_features, build_training_set
 from .rsi import RSI_FEATURE_VERSION, RSI_PERIODS, build_rsi_features, calculate_rsi
+from .recursive_self_improvement import (
+    RECURSIVE_SELF_IMPROVEMENT_VERSION,
+    MarketFutureEvaluation,
+    MarketFrozenTrial,
+    MarketPromotionReport,
+    MarketRecursiveImprovementGate,
+    MarketRsiCandidate,
+    candidate_manifest_digest,
+    freeze_candidate,
+    freeze_trial,
+    freeze_promotion_report,
+    parameter_manifest_digest,
+    trial_manifest_digest,
+    validate_successor,
+)
 from .validation import WalkForwardResult, walk_forward_validate
 from .collector import DailyMarketCollector, MarketDataset, DEFAULT_UNIVERSE
 from .paper_backtest import PaperBacktestResult, run_paper_backtest
@@ -16,8 +31,21 @@ __all__ = [
     "build_training_set",
     "RSI_FEATURE_VERSION",
     "RSI_PERIODS",
+    "RECURSIVE_SELF_IMPROVEMENT_VERSION",
+    "MarketFutureEvaluation",
+    "MarketFrozenTrial",
+    "MarketPromotionReport",
+    "MarketRecursiveImprovementGate",
+    "MarketRsiCandidate",
+    "candidate_manifest_digest",
     "build_rsi_features",
     "calculate_rsi",
+    "freeze_candidate",
+    "freeze_trial",
+    "freeze_promotion_report",
+    "parameter_manifest_digest",
+    "trial_manifest_digest",
+    "validate_successor",
     "walk_forward_validate",
     "DailyMarketCollector",
     "MarketDataset",
