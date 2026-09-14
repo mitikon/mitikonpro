@@ -54,6 +54,7 @@ class AuditReport:
             "autonomous_source_edits": False,
             "autonomous_main_merge": False,
             "trading_authority": False,
+            "recursive_rsi_autonomous_promotion": False,
         }
 
 
@@ -107,7 +108,8 @@ def _check_core(root: Path) -> list[AuditFinding]:
     findings: list[AuditFinding] = []
     model_path = root / "src/leading_signal_lambda/model.py"
     paper_path = root / "src/leading_signal_lambda/paper_pca_sub.py"
-    for path in (model_path, paper_path):
+    recursive_path = root / "src/leading_signal_lambda/recursive_self_improvement.py"
+    for path in (model_path, paper_path, recursive_path):
         if not path.is_file():
             findings.append(AuditFinding("CORE_FILE_MISSING", Severity.CRITICAL, "required core file is missing", str(path)))
     if findings:
@@ -143,6 +145,22 @@ def _check_core(root: Path) -> list[AuditFinding]:
                 str(paper_path),
             )
         )
+    recursive_text = recursive_path.read_text(encoding="utf-8")
+    for required_guard in (
+        '"autonomous_source_edits": False',
+        '"autonomous_main_merge": False',
+        '"trading_authority": False',
+        '"human_approval_required": True',
+    ):
+        if required_guard not in recursive_text:
+            findings.append(
+                AuditFinding(
+                    "RECURSIVE_RSI_GUARD_REMOVED",
+                    Severity.CRITICAL,
+                    f"required recursive RSI guard is missing: {required_guard}",
+                    str(recursive_path),
+                )
+            )
     return findings
 
 
@@ -237,6 +255,7 @@ def audit_repository(root: str | Path) -> AuditReport:
             "workflow_least_privilege",
             "action_sha_pinning",
             "high_confidence_secret_scan",
+            "recursive_rsi_human_promotion_gate",
         ),
     )
 
