@@ -3,6 +3,7 @@ import json
 import numpy as np
 import pandas as pd
 
+from maintenance_rsi import ExternalDataGuard, MalwareScan, MalwareStatus
 from leading_signal_lambda.collector import MarketDataset
 from leading_signal_lambda.forward import (
     FORWARD_TARGETS,
@@ -156,12 +157,36 @@ def test_separate_result_report_ranks_movers_and_deduplicates_history(tmp_path):
     assert "主検証：上昇1位・下落1位の事前選出" in markdown.read_text()
 
 
-def test_loads_already_collected_csv_without_second_provider_call(tmp_path):
+def test_loads_already_collected_csv_without_second_provider_call(tmp_path, monkeypatch):
+    monkeypatch.setattr(
+        ExternalDataGuard,
+        "scan_malware",
+        staticmethod(lambda path: MalwareScan(MalwareStatus.CLEAN, "test", "clean")),
+    )
     expected = sample_dataset(100)
     expected.save_csv(tmp_path)
     actual = load_dataset(tmp_path)
     pd.testing.assert_frame_equal(actual.close, expected.close, check_freq=False, check_names=False)
     pd.testing.assert_frame_equal(actual.volume, expected.volume, check_freq=False, check_names=False)
+
+
+def test_load_dataset_rejects_and_quarantines_disguised_executable_csv(tmp_path, monkeypatch):
+    monkeypatch.setattr(
+        ExternalDataGuard,
+        "scan_malware",
+        staticmethod(lambda path: MalwareScan(MalwareStatus.CLEAN, "test", "clean")),
+    )
+    expected = sample_dataset(100)
+    expected.save_csv(tmp_path)
+    (tmp_path / "daily_close.csv").write_bytes(b"MZmalicious")
+    try:
+        load_dataset(tmp_path)
+    except RuntimeError as error:
+        assert "external data guard rejected" in str(error)
+    else:
+        raise AssertionError("disguised executable content must be rejected")
+    assert not (tmp_path / "daily_close.csv").exists()
+    assert any((tmp_path / "quarantine").glob("*.csv.quarantine"))
 
 
 def test_same_session_carries_first_signal_without_recalculation(tmp_path):

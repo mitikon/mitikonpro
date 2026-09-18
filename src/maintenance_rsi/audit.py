@@ -61,12 +61,17 @@ class AuditReport:
 _PINNED_ACTION = re.compile(
     r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+(?:/[A-Za-z0-9_.-]+)*@[0-9a-f]{40}(?:\s*#.*)?$"
 )
-_BANNED_SOURCE_PATTERNS = {
-    ".bfill(": "future-directed bfill is prohibited",
-    ".backfill(": "future-directed backfill is prohibited",
-    "pickle.load(": "untrusted pickle deserialization is prohibited",
-    "yaml.load(": "unsafe YAML loading is prohibited",
-    "shell=True": "shell=True is prohibited in prediction code",
+_BANNED_QUALIFIED_CALLS = {
+    ("pickle", "load"): "untrusted pickle deserialization is prohibited",
+    ("pickle", "loads"): "untrusted pickle deserialization is prohibited",
+    ("yaml", "load"): "unsafe YAML loading is prohibited",
+    ("yaml", "unsafe_load"): "unsafe YAML loading is prohibited",
+    ("yaml", "full_load"): "unsafe YAML loading is prohibited",
+    ("marshal", "loads"): "untrusted marshal deserialization is prohibited",
+}
+_BANNED_METHOD_CALLS = {
+    "bfill": "future-directed bfill is prohibited",
+    "backfill": "future-directed backfill is prohibited",
 }
 _SECRET_PATTERNS = {
     "AWS_ACCESS_KEY": re.compile(r"AKIA[0-9A-Z]{16}"),
@@ -164,19 +169,57 @@ def _check_core(root: Path) -> list[AuditFinding]:
     return findings
 
 
+def _dangerous_call_findings(tree: ast.AST, path: Path) -> list[AuditFinding]:
+    findings: list[AuditFinding] = []
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Call):
+            continue
+        func = node.func
+        if isinstance(func, ast.Attribute):
+            if func.attr in _BANNED_METHOD_CALLS:
+                findings.append(
+                    AuditFinding(
+                        "DANGEROUS_SOURCE_PATTERN",
+                        Severity.HIGH,
+                        _BANNED_METHOD_CALLS[func.attr],
+                        str(path),
+                    )
+                )
+            if isinstance(func.value, ast.Name):
+                message = _BANNED_QUALIFIED_CALLS.get((func.value.id, func.attr))
+                if message is not None:
+                    findings.append(AuditFinding("DANGEROUS_SOURCE_PATTERN", Severity.HIGH, message, str(path)))
+        for keyword in node.keywords:
+            if (
+                keyword.arg == "shell"
+                and isinstance(keyword.value, ast.Constant)
+                and keyword.value.value is True
+            ):
+                findings.append(
+                    AuditFinding(
+                        "DANGEROUS_SOURCE_PATTERN",
+                        Severity.HIGH,
+                        "shell=True is prohibited in prediction code",
+                        str(path),
+                    )
+                )
+    return findings
+
+
 def _check_prediction_sources(root: Path) -> list[AuditFinding]:
     findings: list[AuditFinding] = []
-    source_root = root / "src/leading_signal_lambda"
-    for path in sorted(source_root.glob("*.py")):
+    source_roots = (root / "src/leading_signal_lambda", root / "src/maintenance_rsi")
+    checked_paths = {
+        path for source_root in source_roots for path in source_root.rglob("*.py")
+    }
+    for path in sorted(checked_paths):
         text = path.read_text(encoding="utf-8")
         try:
-            ast.parse(text, filename=str(path))
+            tree = ast.parse(text, filename=str(path))
         except SyntaxError as exc:
             findings.append(AuditFinding("PYTHON_SYNTAX_ERROR", Severity.CRITICAL, str(exc), str(path)))
             continue
-        for pattern, message in _BANNED_SOURCE_PATTERNS.items():
-            if pattern in text:
-                findings.append(AuditFinding("DANGEROUS_SOURCE_PATTERN", Severity.HIGH, message, str(path)))
+        findings.extend(_dangerous_call_findings(tree, path))
     return findings
 
 

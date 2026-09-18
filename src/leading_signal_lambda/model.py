@@ -59,6 +59,7 @@ class LeadingLambdaClassifier:
         variances = singular**2
         ratios = variances / max(variances.sum(), 1e-12)
         k = int(np.searchsorted(np.cumsum(ratios), self.variance_target) + 1)
+        k = min(k, len(ratios))
         self.components_ = vt[:k].T
         scores = Z @ self.components_
 
