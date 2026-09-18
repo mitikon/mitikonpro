@@ -13,6 +13,8 @@ from typing import Sequence
 import numpy as np
 import pandas as pd
 
+from maintenance_rsi import ExternalDataGuard
+
 from .collector import DailyMarketCollector, MarketDataset
 from .market_calendar import NYSETradingCalendar
 from .model import LeadingLambdaClassifier
@@ -266,15 +268,17 @@ def select_extreme_forecasts(
 def freeze_signals(records: list[FrozenMarketSignal], path: str | Path) -> Path:
     destination = Path(path)
     destination.parent.mkdir(parents=True, exist_ok=True)
-    if destination.exists():
-        raise FileExistsError(f"refusing to overwrite frozen signal: {destination}")
     document = {
         "schema_version": SCHEMA_VERSION,
         "primary_trade": select_primary_trade(records),
         "extreme_forecasts": select_extreme_forecasts(records),
         "signals": [asdict(record) for record in records],
     }
-    destination.write_text(json.dumps(document, ensure_ascii=False, indent=2), encoding="utf-8")
+    try:
+        with destination.open("x", encoding="utf-8") as handle:
+            handle.write(json.dumps(document, ensure_ascii=False, indent=2))
+    except FileExistsError:
+        raise FileExistsError(f"refusing to overwrite frozen signal: {destination}") from None
     return destination
 
 
@@ -300,9 +304,11 @@ def carry_forward_same_session(
         return None
     destination = Path(output_path)
     destination.parent.mkdir(parents=True, exist_ok=True)
-    if destination.exists():
-        raise FileExistsError(f"refusing to overwrite carried signal: {destination}")
-    destination.write_text(source.read_text(encoding="utf-8"), encoding="utf-8")
+    try:
+        with destination.open("x", encoding="utf-8") as handle:
+            handle.write(source.read_text(encoding="utf-8"))
+    except FileExistsError:
+        raise FileExistsError(f"refusing to overwrite carried signal: {destination}") from None
     return destination
 
 
@@ -351,8 +357,6 @@ def settle_frozen_signals(
         return None
     destination = Path(output_path)
     destination.parent.mkdir(parents=True, exist_ok=True)
-    if destination.exists():
-        raise FileExistsError(f"refusing to overwrite settlement: {destination}")
     primary = document.get("primary_trade") or select_primary_trade(document["signals"])
     selected_result = next(
         (row for row in settlements if row["target"] == primary["target"]), None
@@ -419,19 +423,21 @@ def settle_frozen_signals(
         "upside": settle_extreme("upside"),
         "downside": settle_extreme("downside"),
     }
-    destination.write_text(
-        json.dumps(
-            {
-                "schema_version": SCHEMA_VERSION,
-                "primary_trade": primary_settlement,
-                "extreme_forecasts": extreme_settlements,
-                "settlements": settlements,
-            },
-            ensure_ascii=False,
-            indent=2,
-        ),
-        encoding="utf-8",
+    payload = json.dumps(
+        {
+            "schema_version": SCHEMA_VERSION,
+            "primary_trade": primary_settlement,
+            "extreme_forecasts": extreme_settlements,
+            "settlements": settlements,
+        },
+        ensure_ascii=False,
+        indent=2,
     )
+    try:
+        with destination.open("x", encoding="utf-8") as handle:
+            handle.write(payload)
+    except FileExistsError:
+        raise FileExistsError(f"refusing to overwrite settlement: {destination}") from None
     return destination
 
 
@@ -786,10 +792,26 @@ def write_signal_result_markdown(report_path: str | Path, output_path: str | Pat
     return destination
 
 
+def _inspect_external_csv(path: Path) -> None:
+    """Reject or quarantine an external CSV before any parser sees it."""
+    guard = ExternalDataGuard()
+    inspection = guard.inspect(path)
+    if not inspection.accepted:
+        quarantined = guard.quarantine(path, path.parent / "quarantine")
+        raise RuntimeError(
+            f"external data guard rejected {path}: {list(inspection.reasons)}; "
+            f"quarantined at {quarantined}"
+        )
+
+
 def load_dataset(directory: str | Path) -> MarketDataset:
     source = Path(directory)
-    close = pd.read_csv(source / "daily_close.csv", index_col="date", parse_dates=True)
-    volume = pd.read_csv(source / "daily_volume.csv", index_col="date", parse_dates=True)
+    close_path = source / "daily_close.csv"
+    volume_path = source / "daily_volume.csv"
+    _inspect_external_csv(close_path)
+    _inspect_external_csv(volume_path)
+    close = pd.read_csv(close_path, index_col="date", parse_dates=True)
+    volume = pd.read_csv(volume_path, index_col="date", parse_dates=True)
     return MarketDataset(close=close.sort_index(), volume=volume.reindex(close.index).sort_index())
 
 
