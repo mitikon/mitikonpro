@@ -2,7 +2,12 @@
 
 from .model import LeadingLambdaClassifier, Prediction
 from .signals import build_leading_features, build_training_set
-from .rsi import RSI_FEATURE_VERSION, RSI_PERIODS, build_rsi_features, calculate_rsi
+from .relative_strength_feature import (
+    RELATIVE_STRENGTH_FEATURE_VERSION,
+    RELATIVE_STRENGTH_PERIODS,
+    build_relative_strength_features,
+    calculate_relative_strength_index,
+)
 from .recursive_self_improvement import (
     RECURSIVE_SELF_IMPROVEMENT_VERSION,
     MarketFutureEvaluation,
@@ -29,8 +34,8 @@ __all__ = [
     "WalkForwardResult",
     "build_leading_features",
     "build_training_set",
-    "RSI_FEATURE_VERSION",
-    "RSI_PERIODS",
+    "RELATIVE_STRENGTH_FEATURE_VERSION",
+    "RELATIVE_STRENGTH_PERIODS",
     "RECURSIVE_SELF_IMPROVEMENT_VERSION",
     "MarketFutureEvaluation",
     "MarketFrozenTrial",
@@ -38,8 +43,8 @@ __all__ = [
     "MarketRecursiveImprovementGate",
     "MarketRsiCandidate",
     "candidate_manifest_digest",
-    "build_rsi_features",
-    "calculate_rsi",
+    "build_relative_strength_features",
+    "calculate_relative_strength_index",
     "freeze_candidate",
     "freeze_trial",
     "freeze_promotion_report",

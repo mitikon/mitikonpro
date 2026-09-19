@@ -9,7 +9,7 @@ from leading_signal_lambda import (
     build_leading_features,
     build_training_set,
     walk_forward_validate,
-    calculate_rsi,
+    calculate_relative_strength_index,
 )
 from leading_signal_lambda.experiment import validate_target
 from leading_signal_lambda.market_calendar import NYSETradingCalendar
@@ -31,28 +31,28 @@ def test_lambda_and_variance_are_separate_controls():
     assert model.variance_target == 0.90
 
 
-def test_rsi_features_are_multi_period_inputs_not_fixed_trade_rules():
+def test_relative_strength_features_are_multi_period_inputs_not_fixed_trade_rules():
     close, volume = sample_market(120)
     features = build_leading_features(close, volume)
     expected = {
-        "rsi5_SPY_level",
-        "rsi7_SPY_velocity3",
-        "rsi14_XLK_cross50",
-        "rsi21_XLP_extreme_state",
+        "rs5_SPY_level",
+        "rs7_SPY_velocity3",
+        "rs14_XLK_cross50",
+        "rs21_XLP_extreme_state",
     }
     # XLK is not part of this compact fixture; every available ETF is still covered.
-    expected.remove("rsi14_XLK_cross50")
-    expected.add("rsi14_QQQ_cross50")
+    expected.remove("rs14_XLK_cross50")
+    expected.add("rs14_QQQ_cross50")
     assert expected <= set(features.columns)
     assert not any("action" in column or "long" in column or "short" in column for column in features)
 
 
-def test_rsi_uses_only_past_and_current_values():
+def test_relative_strength_index_uses_only_past_and_current_values():
     close, _ = sample_market(120)
-    original = calculate_rsi(close["SPY"], 14)
+    original = calculate_relative_strength_index(close["SPY"], 14)
     changed = close["SPY"].copy()
     changed.iloc[-1] *= 10.0
-    recalculated = calculate_rsi(changed, 14)
+    recalculated = calculate_relative_strength_index(changed, 14)
     pd.testing.assert_series_equal(original.iloc[:-1], recalculated.iloc[:-1])
     assert original.iloc[-1] != recalculated.iloc[-1]
 

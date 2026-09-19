@@ -3,7 +3,7 @@ from __future__ import annotations
 import numpy as np
 import pandas as pd
 
-from .rsi import build_rsi_features
+from .relative_strength_feature import build_relative_strength_features
 
 
 REQUIRED_SYMBOLS = ("SPY", "QQQ", "RSP", "SMH", "HYG", "LQD", "XLY", "XLP")
@@ -67,10 +67,11 @@ def build_leading_features(close: pd.DataFrame, volume: pd.DataFrame | None = No
     features["spread_hyg_lqd"] = returns["HYG"] - returns["LQD"]
     features["spread_xly_xlp"] = returns["XLY"] - returns["XLP"]
 
-    # RSI is an observed feature family, never a fixed 70/30 trading rule.
-    # The daily fit/settlement loop relearns its usefulness from next-session outcomes.
-    rsi_features = build_rsi_features(numeric_close, tuple(numeric_close.columns))
-    features.update({column: rsi_features[column] for column in rsi_features.columns})
+    # Relative Strength Index is an observed feature family, never a fixed 70/30
+    # trading rule. The daily fit/settlement loop relearns its usefulness from
+    # next-session outcomes. This is unrelated to RSI (Recursive Self-Improvement).
+    relative_strength_features = build_relative_strength_features(numeric_close, tuple(numeric_close.columns))
+    features.update({column: relative_strength_features[column] for column in relative_strength_features.columns})
 
     if {"VIX9D", "VIX3M"}.issubset(numeric_close.columns):
         features["vix_term_spread"] = numeric_close["VIX9D"] / numeric_close["VIX3M"] - 1.0

@@ -19,10 +19,10 @@ from .collector import DailyMarketCollector, MarketDataset
 from .market_calendar import NYSETradingCalendar
 from .model import LeadingLambdaClassifier
 from .signals import REQUIRED_SYMBOLS, build_leading_features, build_training_set
-from .rsi import RSI_FEATURE_VERSION, RSI_PERIODS
+from .relative_strength_feature import RELATIVE_STRENGTH_FEATURE_VERSION, RELATIVE_STRENGTH_PERIODS
 
 
-SCHEMA_VERSION = "market-forward-v6"
+SCHEMA_VERSION = "market-forward-v7"
 TRADE_SELECTION_RULE = "maximum_absolute_predicted_return_v1"
 EXTREME_SELECTION_RULE = "predicted_return_extremes_v1"
 TARGET_METADATA: dict[str, tuple[str, str]] = {
@@ -78,8 +78,8 @@ class FrozenMarketSignal:
     lambda_reg: float
     variance_target: float
     neutral_band: float
-    rsi_feature_version: str
-    rsi_periods: tuple[int, ...]
+    relative_strength_feature_version: str
+    relative_strength_periods: tuple[int, ...]
     input_sha256: str
     status: str = "PENDING"
 
@@ -198,8 +198,8 @@ def generate_forward_signals(
                 lambda_reg=0.10,
                 variance_target=0.90,
                 neutral_band=neutral_band,
-                rsi_feature_version=RSI_FEATURE_VERSION,
-                rsi_periods=RSI_PERIODS,
+                relative_strength_feature_version=RELATIVE_STRENGTH_FEATURE_VERSION,
+                relative_strength_periods=RELATIVE_STRENGTH_PERIODS,
                 input_sha256=digest,
             )
         )
@@ -294,7 +294,7 @@ def carry_forward_same_session(
     document = json.loads(source.read_text(encoding="utf-8"))
     signals = document.get("signals", [])
     current_session = _signal_session(dataset).date().isoformat()
-    compatible_versions = {"market-forward-v4", "market-forward-v5", SCHEMA_VERSION}
+    compatible_versions = {"market-forward-v4", "market-forward-v5", "market-forward-v6", SCHEMA_VERSION}
     if (
         document.get("schema_version") not in compatible_versions
         or not signals

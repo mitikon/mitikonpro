@@ -24,9 +24,9 @@ FIXED_VARIANCE_TARGET = 0.90
 FIXED_MIN_SAMPLES = 60
 ALLOWED_CANDIDATE_PARAMETERS = frozenset(
     {
-        "rsi_periods",
-        "rsi_feature_set",
-        "rsi_feature_weight",
+        "relative_strength_periods",
+        "relative_strength_feature_set",
+        "relative_strength_feature_weight",
         "feature_lags",
         "neutral_band",
         "no_trade_threshold",
