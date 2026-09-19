@@ -18,6 +18,7 @@ from leading_signal_lambda.forward import (
     write_signal_result_markdown,
     write_signal_result_report,
 )
+from leading_signal_lambda.error_classification import ERROR_CATEGORIES
 from leading_signal_lambda.signals import REQUIRED_SYMBOLS
 
 
@@ -139,6 +140,11 @@ def test_separate_result_report_ranks_movers_and_deduplicates_history(tmp_path):
     )
     assert 0.0 <= report["daily"]["direction_accuracy"] <= 1.0
     assert report["definition"]["no_lookahead"]
+    assert set(report["daily"]["error_classification"]) == ERROR_CATEGORIES
+    assert set(report["cumulative"]["error_classification"]) == ERROR_CATEGORIES
+    assert all(isinstance(value, int) for value in report["daily"]["error_classification"].values())
+    misclassified_targets = sum(1 for row in report["daily"]["results"] if not row["direction_correct"])
+    assert sum(report["daily"]["error_classification"].values()) <= misclassified_targets + 2
 
     second_history = tmp_path / "history_second.csv"
     write_signal_result_report(
@@ -155,6 +161,50 @@ def test_separate_result_report_ranks_movers_and_deduplicates_history(tmp_path):
     assert "実績上昇上位" in markdown.read_text()
     assert "主判定：前日に選定した単独トレード" in markdown.read_text()
     assert "主検証：上昇1位・下落1位の事前選出" in markdown.read_text()
+
+
+def test_error_classification_tolerates_pre_migration_history_without_new_columns(tmp_path):
+    """A history.csv written before neutral_band/imputed_feature_count existed must not crash."""
+    prior = sample_dataset(759)
+    frozen = freeze_signals(generate_forward_signals(prior, FakeCalendar()), tmp_path / "prior.json")
+    settled = settle_frozen_signals(frozen, sample_dataset(760), tmp_path / "settled.json")
+
+    legacy_history = pd.DataFrame(
+        [
+            {
+                "signal_session": "2026-08-01",
+                "target_session": "2026-08-02",
+                "target": "SPY",
+                "target_category": "市場ETF",
+                "target_name": "S&P 500",
+                "action": "SHORT",
+                "predicted_class": -1,
+                "predicted_return": -0.01,
+                "confidence": 0.5,
+                "edge": 0.1,
+                "actual_return": 0.02,
+                "actual_class": 1,
+                "direction_correct": False,
+                "return_error": 0.03,
+                "absolute_divergence_pp": 3.0,
+                "strategy_return_before_cost": -0.02,
+                "input_sha256": "b" * 64,
+            }
+        ]
+    )
+    legacy_path = tmp_path / "legacy_history.csv"
+    legacy_history.to_csv(legacy_path, index=False)
+
+    report_path, _, _ = write_signal_result_report(
+        settled,
+        tmp_path / "report_with_legacy.json",
+        tmp_path / "rows_with_legacy.csv",
+        tmp_path / "history_with_legacy.csv",
+        previous_history_path=legacy_path,
+    )
+    report = json.loads(report_path.read_text())
+    assert set(report["cumulative"]["error_classification"]) == ERROR_CATEGORIES
+    assert report["cumulative"]["settled_predictions"] == len(FORWARD_TARGETS) + 1
 
 
 def test_loads_already_collected_csv_without_second_provider_call(tmp_path, monkeypatch):

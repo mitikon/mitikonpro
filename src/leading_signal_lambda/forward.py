@@ -16,6 +16,7 @@ import pandas as pd
 from maintenance_rsi import ExternalDataGuard
 
 from .collector import DailyMarketCollector, MarketDataset
+from .error_classification import summarize_error_classification
 from .market_calendar import NYSETradingCalendar
 from .model import LeadingLambdaClassifier
 from .signals import REQUIRED_SYMBOLS, build_leading_features, build_training_set
@@ -446,7 +447,7 @@ REPORT_COLUMNS = (
     "action", "predicted_class", "predicted_return", "confidence", "edge",
     "actual_return", "actual_class", "direction_correct",
     "return_error", "absolute_divergence_pp", "strategy_return_before_cost",
-    "input_sha256",
+    "input_sha256", "neutral_band", "imputed_feature_count",
 )
 
 
@@ -648,6 +649,12 @@ def write_signal_result_report(
     risers = rows.sort_values("actual_return", ascending=False)
     fallers = rows.sort_values("actual_return", ascending=True)
     misses = rows.sort_values("absolute_divergence_pp", ascending=False, na_position="last")
+    daily_error_classification = summarize_error_classification(
+        rows.to_dict("records"), [daily_extremes]
+    )
+    cumulative_error_classification = summarize_error_classification(
+        history.to_dict("records"), historical_extremes
+    )
     report = {
         "schema_version": "signal-result-report-v2",
         "definition": {
@@ -656,6 +663,11 @@ def write_signal_result_report(
             "no_lookahead": "予測値は凍結済みforward_signalから取得し、結果で再計算しない",
             "extreme_target_hit": "予測上昇1位・下落1位のETF銘柄が実績1位と一致",
             "extreme_direction_correct": "上昇候補は実績騰落率が正、下落候補は実績騰落率が負",
+            "error_classification": (
+                "外れの分類: extraction_miss(抽出漏れ)/overestimation(過大評価)/"
+                "final_exclusion(最終除外)/missing_input(入力欠損)/market_noise(市場ノイズ)。"
+                "分類は候補提案の根拠記録のみに用い、個々の外れを直ちに恒久ルールへは反映しない"
+            ),
         },
         "daily": {
             "signal_session": str(rows["signal_session"].iloc[0]),
@@ -668,6 +680,7 @@ def write_signal_result_report(
             "median_absolute_divergence_pp": float(divergence.median()) if len(divergence) else None,
             "primary_trade": primary_trade,
             "extreme_forecasts": daily_extremes,
+            "error_classification": daily_error_classification,
             "results": records(rows, len(rows)),
             "largest_risers": records(risers),
             "largest_fallers": records(fallers),
@@ -703,6 +716,7 @@ def write_signal_result_report(
             "downside_direction_accuracy": float(
                 np.mean([value["downside"]["direction_correct"] for value in historical_extremes])
             ),
+            "error_classification": cumulative_error_classification,
         },
     }
     report_destination = Path(report_path)

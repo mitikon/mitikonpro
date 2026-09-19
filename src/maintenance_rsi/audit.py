@@ -114,7 +114,8 @@ def _check_core(root: Path) -> list[AuditFinding]:
     model_path = root / "src/leading_signal_lambda/model.py"
     paper_path = root / "src/leading_signal_lambda/paper_pca_sub.py"
     recursive_path = root / "src/leading_signal_lambda/recursive_self_improvement.py"
-    for path in (model_path, paper_path, recursive_path):
+    error_classification_path = root / "src/leading_signal_lambda/error_classification.py"
+    for path in (model_path, paper_path, recursive_path, error_classification_path):
         if not path.is_file():
             findings.append(AuditFinding("CORE_FILE_MISSING", Severity.CRITICAL, "required core file is missing", str(path)))
     if findings:
@@ -164,6 +165,20 @@ def _check_core(root: Path) -> list[AuditFinding]:
                     Severity.CRITICAL,
                     f"required recursive RSI guard is missing: {required_guard}",
                     str(recursive_path),
+                )
+            )
+    error_classification_text = error_classification_path.read_text(encoding="utf-8")
+    for required_guard in (
+        "len(sessions) < MIN_RATIONALE_SESSIONS",
+        "candidate rationale requires at least one classified error",
+    ):
+        if required_guard not in error_classification_text:
+            findings.append(
+                AuditFinding(
+                    "ERROR_CLASSIFICATION_GUARD_REMOVED",
+                    Severity.CRITICAL,
+                    f"required anti-overfitting rationale guard is missing: {required_guard}",
+                    str(error_classification_path),
                 )
             )
     return findings
@@ -299,6 +314,7 @@ def audit_repository(root: str | Path) -> AuditReport:
             "action_sha_pinning",
             "high_confidence_secret_scan",
             "recursive_rsi_human_promotion_gate",
+            "error_classification_anti_overfitting_guard",
         ),
     )
 

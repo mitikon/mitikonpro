@@ -78,3 +78,9 @@ SPYとQQQについて、ウォークフォワード予測を時点固定CSVに�
 相対力指数（Relative Strength Index）とは無関係に、`MarketRecursiveImprovementGate`が改善候補を世代管理します。候補の設定・親世代・Gitコミットを凍結し、各営業日の入力、現行予測、候補予測、候補マニフェストを結果判明前の試行記録へ書き込み禁止形式で固定します。その後に発生した20営業日以上の結果だけで現行版と比較し、試行記録とのハッシュ不一致は評価対象にできません。
 
 平均損失、最大上昇ETF・最大下落ETFの選出、取引コスト控除後収益、最大ドローダウンの全条件を通過した場合だけ`PROMOTION_PROPOSED`を出します。これは人間が確認するPR候補であり、ソース変更、`main`へのマージ、売買を自動実行しません。固定中核の`lambda_reg=0.10`、`variance_target=0.90`、`min_samples=60`は改善対象外です。
+
+## 誤差分類と候補根拠ログ
+
+`error_classification.py`が、結果判明後の外れを**抽出漏れ・過大評価・最終除外・入力欠損・市場ノイズ**の5分類に振り分けます。分類は`forward_signal`の結果照合レポート（`signal_result_report.json`の`daily.error_classification`/`cumulative.error_classification`）へ毎回記録されます。
+
+この分類は個々の外れを直ちに恒久ルールへ変換しません。`CandidateRationale`は最低`MIN_RATIONALE_SESSIONS`件（既定5件）の既知結果に基づく説明可能な根拠（`narrative`）を要求する書き込み一回限りのログで、1件の外れへの過剰適合や説明不能な重み変更を構造的に防ぎます。人間はこのログを読んだ上で、許可されたパラメータのみを変更する`MarketRsiCandidate`を提案し、その候補は結果判明前に凍結された未来のセッションでのみ`MarketRecursiveImprovementGate`により評価されます。分類ロジック自体が変更されていないことは保守専用RSI監査で検査し、削除するとCIが失敗します。

@@ -23,6 +23,21 @@ from .recursive_self_improvement import (
     trial_manifest_digest,
     validate_successor,
 )
+from .error_classification import (
+    ERROR_CATEGORIES,
+    EXTRACTION_MISS,
+    FINAL_EXCLUSION,
+    MARKET_NOISE,
+    MISSING_INPUT,
+    MIN_RATIONALE_SESSIONS,
+    OVERESTIMATION,
+    CandidateRationale,
+    classify_extreme_selection,
+    classify_target_settlement,
+    freeze_candidate_rationale,
+    rationale_manifest_digest,
+    summarize_error_classification,
+)
 from .validation import WalkForwardResult, walk_forward_validate
 from .collector import DailyMarketCollector, MarketDataset, DEFAULT_UNIVERSE
 from .paper_backtest import PaperBacktestResult, run_paper_backtest
@@ -51,6 +66,19 @@ __all__ = [
     "parameter_manifest_digest",
     "trial_manifest_digest",
     "validate_successor",
+    "ERROR_CATEGORIES",
+    "EXTRACTION_MISS",
+    "FINAL_EXCLUSION",
+    "MARKET_NOISE",
+    "MISSING_INPUT",
+    "MIN_RATIONALE_SESSIONS",
+    "OVERESTIMATION",
+    "CandidateRationale",
+    "classify_extreme_selection",
+    "classify_target_settlement",
+    "freeze_candidate_rationale",
+    "rationale_manifest_digest",
+    "summarize_error_classification",
     "walk_forward_validate",
     "DailyMarketCollector",
     "MarketDataset",
