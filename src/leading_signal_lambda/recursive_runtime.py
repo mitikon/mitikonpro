@@ -17,10 +17,12 @@ from typing import Mapping
 from .recursive_self_improvement import (
     MarketFutureEvaluation,
     MarketFrozenTrial,
+    MarketPromotionReport,
     MarketRecursiveImprovementGate,
     MarketRsiCandidate,
     candidate_manifest_digest,
     parameter_manifest_digest,
+    sequential_loss_improvement_test,
     trial_manifest_digest,
     validate_successor,
 )
@@ -310,49 +312,103 @@ def settle_pending_trial(
     return True
 
 
-def evaluate_and_rotate_candidate(
+def _rotate_to_next_candidate(
     state: dict[str, object],
     source_commit: str,
-    now: datetime | None = None,
+    now: datetime | None,
+    completed_entry: dict[str, object],
     *,
-    min_future_sessions: int = 20,
-) -> dict[str, object] | None:
-    if len(state.get("evaluations", [])) < min_future_sessions:
-        return None
-    candidate = _candidate_from_payload(state["candidate"])
-    trials = [_trial_from_payload(value) for value in state["trials"]]
-    evaluations = [_evaluation_from_payload(value) for value in state["evaluations"]]
-    report = MarketRecursiveImprovementGate(
-        min_future_sessions=min_future_sessions
-    ).evaluate(candidate, evaluations, trials)
-    report_payload = report.to_dict()
-    promoted = report.status == "PROMOTION_PROPOSED"
-    if promoted:
+    promoted_candidate: MarketRsiCandidate | None = None,
+    promotion_report: MarketPromotionReport | None = None,
+) -> None:
+    """Record a finished candidate's outcome and seal the next generation."""
+    if promoted_candidate is not None:
         state["active_model"] = {
-            "model_id": candidate.candidate_id,
-            "generation": candidate.generation,
-            "parameters": deepcopy(dict(candidate.parameters)),
-            "promotion_report_sha256": report.report_sha256,
+            "model_id": promoted_candidate.candidate_id,
+            "generation": promoted_candidate.generation,
+            "parameters": deepcopy(dict(promoted_candidate.parameters)),
+            "promotion_report_sha256": promotion_report.report_sha256,
         }
     state.setdefault("completed_candidates", []).append(
         {
-            **report_payload,
-            "parameter_promotion_applied": promoted,
+            **completed_entry,
             "completed_at": (now or datetime.now(timezone.utc)).astimezone(timezone.utc).isoformat(),
         }
     )
     created = (now or datetime.now(timezone.utc)).astimezone(timezone.utc)
     next_candidate = _new_candidate(state, source_commit, created - timedelta(microseconds=1))
-    if promoted:
+    if promoted_candidate is not None:
         # Belt-and-suspenders: confirm the freshly promoted model_id/generation
         # actually chains to this report before it becomes the recursive parent.
-        validate_successor(report, next_candidate)
+        validate_successor(promotion_report, next_candidate)
     state["attempt"] = int(state["attempt"]) + 1
     state["candidate"] = next_candidate.sealed_payload()
     state["candidate_manifest_sha256"] = candidate_manifest_digest(next_candidate)
     state["trials"] = []
     state["evaluations"] = []
     state["pending_trial"] = None
+
+
+def evaluate_and_rotate_candidate(
+    state: dict[str, object],
+    source_commit: str,
+    now: datetime | None = None,
+    *,
+    min_future_sessions: int = 20,
+    min_early_rejection_sessions: int = 5,
+    false_promotion_rate: float = 0.05,
+    false_rejection_rate: float = 0.10,
+) -> dict[str, object] | None:
+    evaluations_payload = state.get("evaluations", [])
+    sessions_so_far = len(evaluations_payload)
+    if sessions_so_far < min_early_rejection_sessions:
+        return None
+    evaluations = [_evaluation_from_payload(value) for value in evaluations_payload]
+
+    if sessions_so_far < min_future_sessions:
+        # A Wald SPRT verdict is valid evidence at any sample size, so a
+        # candidate that is *already* statistically conclusively worse than
+        # baseline can be abandoned now instead of burning the rest of the
+        # min_future_sessions window on a doomed candidate. Never promotes
+        # on a partial window: only an early REJECT short-circuits here.
+        early_evidence = sequential_loss_improvement_test(
+            [row.baseline_loss for row in evaluations],
+            [row.candidate_loss for row in evaluations],
+            alpha=false_promotion_rate,
+            beta=false_rejection_rate,
+        )
+        if early_evidence.decision != "REJECT":
+            return None
+        candidate = _candidate_from_payload(state["candidate"])
+        early_report = {
+            "status": "EARLY_REJECTED",
+            "candidate_id": candidate.candidate_id,
+            "generation": candidate.generation,
+            "evaluated_sessions": sessions_so_far,
+            "mean_loss_improvement": early_evidence.mean_improvement,
+            "log_likelihood_ratio": early_evidence.log_likelihood_ratio,
+            "parameter_promotion_applied": False,
+        }
+        _rotate_to_next_candidate(state, source_commit, now, early_report)
+        return early_report
+
+    candidate = _candidate_from_payload(state["candidate"])
+    trials = [_trial_from_payload(value) for value in state["trials"]]
+    report = MarketRecursiveImprovementGate(
+        min_future_sessions=min_future_sessions,
+        false_promotion_rate=false_promotion_rate,
+        false_rejection_rate=false_rejection_rate,
+    ).evaluate(candidate, evaluations, trials)
+    report_payload = report.to_dict()
+    promoted = report.status == "PROMOTION_PROPOSED"
+    _rotate_to_next_candidate(
+        state,
+        source_commit,
+        now,
+        {**report_payload, "parameter_promotion_applied": promoted},
+        promoted_candidate=candidate if promoted else None,
+        promotion_report=report if promoted else None,
+    )
     return report_payload
 
 
