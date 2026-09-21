@@ -12,9 +12,9 @@ from dataclasses import asdict, dataclass
 from datetime import date, datetime, timezone
 from hashlib import sha256
 import json
-from math import isfinite
+from math import isfinite, log
 from pathlib import Path
-from statistics import mean
+from statistics import mean, stdev
 from typing import Mapping, Sequence
 
 
@@ -222,14 +222,92 @@ class MarketPromotionReport:
         }
 
 
+@dataclass(frozen=True)
+class SequentialEvidence:
+    """Wald SPRT verdict on whether candidate losses beat baseline losses.
+
+    Tests H0: true mean improvement <= 0 against H1: true mean improvement
+    >= ``min_effect``, controlling the false-promotion rate at ``alpha`` and
+    the false-rejection rate at ``beta``.  Unlike a fixed-N threshold peeked
+    at repeatedly, a Wald SPRT boundary crossing is valid evidence at
+    whatever sample size it first occurs, so this is safe to evaluate before
+    a full evaluation window has accumulated.
+    """
+
+    decision: str  # "CONTINUE" | "PROMOTE" | "REJECT"
+    sessions: int
+    mean_improvement: float
+    log_likelihood_ratio: float
+    upper_boundary: float
+    lower_boundary: float
+
+
+def sequential_loss_improvement_test(
+    baseline_losses: Sequence[float],
+    candidate_losses: Sequence[float],
+    *,
+    min_effect: float = 0.001,
+    alpha: float = 0.05,
+    beta: float = 0.10,
+) -> SequentialEvidence:
+    if len(baseline_losses) != len(candidate_losses):
+        raise ValueError("baseline and candidate loss series must be paired")
+    if not baseline_losses:
+        raise ValueError("at least one paired observation is required")
+    if min_effect <= 0:
+        raise ValueError("min_effect must be positive")
+    if not 0.0 < alpha < 0.5 or not 0.0 < beta < 0.5:
+        raise ValueError("alpha and beta must be in (0, 0.5)")
+
+    sessions = len(baseline_losses)
+    diffs = [float(b) - float(c) for b, c in zip(baseline_losses, candidate_losses)]
+    upper = log((1.0 - beta) / alpha)
+    lower = log(beta / (1.0 - alpha))
+    mean_diff = mean(diffs)
+    if sessions < 2:
+        return SequentialEvidence("CONTINUE", sessions, mean_diff, 0.0, upper, lower)
+
+    spread = stdev(diffs)
+    if spread <= 1e-12:
+        # Every session agrees exactly: there is no noise to test against, so
+        # decide from the sign of the (unanimous) improvement directly.
+        if mean_diff >= min_effect:
+            return SequentialEvidence("PROMOTE", sessions, mean_diff, float("inf"), upper, lower)
+        if mean_diff <= 0.0:
+            return SequentialEvidence("REJECT", sessions, mean_diff, float("-inf"), upper, lower)
+        return SequentialEvidence("CONTINUE", sessions, mean_diff, 0.0, upper, lower)
+
+    variance = spread * spread
+    mu0, mu1 = 0.0, min_effect
+    llr = sum((mu1 - mu0) * (2.0 * d - mu0 - mu1) for d in diffs) / (2.0 * variance)
+    if llr >= upper:
+        decision = "PROMOTE"
+    elif llr <= lower:
+        decision = "REJECT"
+    else:
+        decision = "CONTINUE"
+    return SequentialEvidence(decision, sessions, mean_diff, llr, upper, lower)
+
+
 class MarketRecursiveImprovementGate:
     """Evaluate one sealed child generation on genuinely later sessions."""
 
-    def __init__(self, *, min_future_sessions: int = 20, min_loss_improvement: float = 0.001) -> None:
-        if min_future_sessions < 20 or min_loss_improvement < 0:
+    def __init__(
+        self,
+        *,
+        min_future_sessions: int = 20,
+        min_loss_improvement: float = 0.001,
+        false_promotion_rate: float = 0.05,
+        false_rejection_rate: float = 0.10,
+    ) -> None:
+        if min_future_sessions < 20 or min_loss_improvement <= 0:
+            raise ValueError("unsafe recursive-improvement gate configuration")
+        if not 0.0 < false_promotion_rate < 0.5 or not 0.0 < false_rejection_rate < 0.5:
             raise ValueError("unsafe recursive-improvement gate configuration")
         self.min_future_sessions = int(min_future_sessions)
         self.min_loss_improvement = float(min_loss_improvement)
+        self.false_promotion_rate = float(false_promotion_rate)
+        self.false_rejection_rate = float(false_rejection_rate)
 
     def evaluate(
         self,
@@ -283,11 +361,23 @@ class MarketRecursiveImprovementGate:
         baseline_dd = max(row.baseline_drawdown for row in rows)
         candidate_dd = max(row.candidate_drawdown for row in rows)
         improvement = baseline_loss - candidate_loss
+        loss_evidence = sequential_loss_improvement_test(
+            [row.baseline_loss for row in rows],
+            [row.candidate_loss for row in rows],
+            min_effect=self.min_loss_improvement,
+            alpha=self.false_promotion_rate,
+            beta=self.false_rejection_rate,
+        )
         gates = {
             "sealed_before_future_predictions": True,
             "pre_outcome_trial_attested": True,
             "minimum_future_sessions": True,
-            "loss_improved": improvement >= self.min_loss_improvement,
+            # A Wald SPRT verdict on the paired per-session loss difference,
+            # not a flat mean-improvement threshold: it controls the
+            # false-promotion rate explicitly (self.false_promotion_rate)
+            # instead of accepting any improvement above an arbitrary bar
+            # regardless of session-to-session noise.
+            "loss_improved": loss_evidence.decision == "PROMOTE",
             "upside_selection_not_worse": candidate_up >= baseline_up,
             "downside_selection_not_worse": candidate_down >= baseline_down,
             "net_return_not_worse": candidate_return >= baseline_return,

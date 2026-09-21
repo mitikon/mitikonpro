@@ -173,7 +173,7 @@ def _check_core(root: Path) -> list[AuditFinding]:
         "MarketRecursiveImprovementGate",
         "baseline forecast changed after recursive RSI freeze",
         "candidate forecast changed after recursive RSI freeze",
-        '"parameter_promotion_applied": promoted',
+        '"parameter_promotion_applied": applied',
     ):
         if required_runtime_guard not in runtime_text:
             findings.append(
