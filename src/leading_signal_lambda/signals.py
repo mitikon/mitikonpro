@@ -3,7 +3,7 @@ from __future__ import annotations
 import numpy as np
 import pandas as pd
 
-from .rsi import build_rsi_features
+from .rsi import RSI_PERIODS, build_rsi_features
 
 
 REQUIRED_SYMBOLS = ("SPY", "QQQ", "RSP", "SMH", "HYG", "LQD", "XLY", "XLP")
@@ -20,11 +20,33 @@ def _has_usable_history(series: pd.Series, *, positive_only: bool = False) -> bo
     return len(series) - 1 - int(positions[-1]) <= MAX_SERIES_STALENESS_ROWS
 
 
-def build_leading_features(close: pd.DataFrame, volume: pd.DataFrame | None = None) -> pd.DataFrame:
+RSI_FEATURE_SET = ("level", "velocity3", "cross50", "extreme_state")
+
+
+def build_leading_features(
+    close: pd.DataFrame,
+    volume: pd.DataFrame | None = None,
+    *,
+    feature_lags: int = 5,
+    rsi_periods: tuple[int, ...] = RSI_PERIODS,
+    rsi_feature_set: tuple[str, ...] = RSI_FEATURE_SET,
+    rsi_feature_weight: float = 1.0,
+) -> pd.DataFrame:
     """日次終値から1～5日ラグと主要な市場内部乖離を作る。
 
     入力は日付昇順を前提とし、未来方向への補完（backfill）は一切行わない。
     """
+    if not 1 <= int(feature_lags) <= 10:
+        raise ValueError("feature_lags must be in [1, 10]")
+    periods = tuple(int(period) for period in rsi_periods)
+    if not periods or any(period < 2 or period > 60 for period in periods):
+        raise ValueError("rsi_periods must contain values in [2, 60]")
+    feature_set = tuple(str(value) for value in rsi_feature_set)
+    unknown_rsi_features = set(feature_set) - set(RSI_FEATURE_SET)
+    if not feature_set or unknown_rsi_features:
+        raise ValueError(f"unsupported RSI feature set: {sorted(unknown_rsi_features)}")
+    if not 0.0 <= float(rsi_feature_weight) <= 3.0:
+        raise ValueError("rsi_feature_weight must be in [0, 3]")
     if not close.index.is_monotonic_increasing:
         raise ValueError("close index must be sorted in ascending time order")
     missing = set(REQUIRED_SYMBOLS) - set(close.columns)
@@ -56,7 +78,7 @@ def build_leading_features(close: pd.DataFrame, volume: pd.DataFrame | None = No
     features: dict[str, pd.Series] = {}
     for symbol in numeric_close.columns:
         observed_returns = returns[symbol].dropna()
-        for lag in range(1, 6):
+        for lag in range(1, int(feature_lags) + 1):
             # Lag by that market's observed sessions, not by union-calendar rows.
             features[f"ret_{symbol}_lag{lag}"] = observed_returns.shift(lag - 1).reindex(
                 numeric_close.index
@@ -69,8 +91,20 @@ def build_leading_features(close: pd.DataFrame, volume: pd.DataFrame | None = No
 
     # RSI is an observed feature family, never a fixed 70/30 trading rule.
     # The daily fit/settlement loop relearns its usefulness from next-session outcomes.
-    rsi_features = build_rsi_features(numeric_close, tuple(numeric_close.columns))
-    features.update({column: rsi_features[column] for column in rsi_features.columns})
+    rsi_features = build_rsi_features(
+        numeric_close, tuple(numeric_close.columns), periods=periods
+    )
+    selected_rsi_columns = [
+        column
+        for column in rsi_features.columns
+        if any(column.endswith(f"_{feature}") for feature in feature_set)
+    ]
+    features.update(
+        {
+            column: rsi_features[column] * float(rsi_feature_weight)
+            for column in selected_rsi_columns
+        }
+    )
 
     if {"VIX9D", "VIX3M"}.issubset(numeric_close.columns):
         features["vix_term_spread"] = numeric_close["VIX9D"] / numeric_close["VIX3M"] - 1.0

@@ -215,8 +215,10 @@ class MarketPromotionReport:
             "gates": dict(self.gates),
             "autonomous_source_edits": False,
             "autonomous_main_merge": False,
+            "autonomous_parameter_promotion": True,
             "trading_authority": False,
             "human_approval_required": True,
+            "human_approval_required_for_source_changes": True,
         }
 
 

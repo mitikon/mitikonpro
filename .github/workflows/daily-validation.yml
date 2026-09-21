@@ -70,10 +70,18 @@ jobs:
           START_DATE: ${{ inputs.start_date || '2015-01-01' }}
         run: |
           previous=$(find artifacts/previous/latest -name forward_signal.json -print -quit 2>/dev/null || true)
+          previous_rsi_state=$(find artifacts/previous/latest -name recursive_rsi_state.json -print -quit 2>/dev/null || true)
+          previous_candidate=$(find artifacts/previous/latest -name recursive_rsi_candidate_signal.json -print -quit 2>/dev/null || true)
           mapfile -t previous_histories < <(find artifacts/history-sources -name signal_result_history.csv -print 2>/dev/null | sort)
           mapfile -t previous_trade_histories < <(find artifacts/history-sources -name selected_trade_history.csv -print 2>/dev/null | sort)
           if [ -n "$previous" ]; then
             args=(--input-dir artifacts/validation/raw --output artifacts/validation/forward_signal.json --previous "$previous")
+            if [ -n "$previous_rsi_state" ]; then
+              args+=(--previous-rsi-state "$previous_rsi_state")
+            fi
+            if [ -n "$previous_candidate" ]; then
+              args+=(--previous-candidate-signal "$previous_candidate")
+            fi
             for history in "${previous_histories[@]}"; do
               args+=(--previous-history "$history")
             done
