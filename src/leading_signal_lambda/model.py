@@ -31,6 +31,7 @@ class LeadingLambdaClassifier:
         variance_target: float = 0.90,
         no_trade_threshold: float = 0.45,
         min_samples: int = 60,
+        feature_family_weights: dict[str, float] | None = None,
     ) -> None:
         if not 0.0 <= lambda_reg <= 1.0:
             raise ValueError("lambda_reg must be in [0, 1]")
@@ -40,6 +41,9 @@ class LeadingLambdaClassifier:
         self.variance_target = variance_target
         self.no_trade_threshold = no_trade_threshold
         self.min_samples = min_samples
+        self.feature_family_weights = dict(feature_family_weights or {})
+        if any(not 0.0 <= float(value) <= 3.0 for value in self.feature_family_weights.values()):
+            raise ValueError("feature family weights must be in [0, 3]")
 
     def fit(self, X: pd.DataFrame, y: pd.Series) -> "LeadingLambdaClassifier":
         X, y = self._clean_xy(X, y)
@@ -54,6 +58,21 @@ class LeadingLambdaClassifier:
         scale = X.std(axis=0, ddof=0).to_numpy(dtype=float)
         self.scale_ = np.where(scale > 1e-12, scale, 1.0)
         Z = (X.to_numpy(dtype=float) - self.mean_) / self.scale_
+        self.feature_weights_ = np.array(
+            [
+                next(
+                    (
+                        float(weight)
+                        for prefix, weight in self.feature_family_weights.items()
+                        if column.startswith(prefix)
+                    ),
+                    1.0,
+                )
+                for column in self.columns_
+            ],
+            dtype=float,
+        )
+        Z = Z * self.feature_weights_
 
         _, singular, vt = np.linalg.svd(Z, full_matrices=False)
         variances = singular**2
@@ -86,7 +105,7 @@ class LeadingLambdaClassifier:
         values = row[self.columns_].astype(float).to_numpy()
         if not np.isfinite(values).all():
             raise ValueError("prediction row contains missing or infinite values")
-        score = ((values - self.mean_) / self.scale_) @ self.components_
+        score = (((values - self.mean_) / self.scale_) * self.feature_weights_) @ self.components_
 
         logits: dict[int, float] = {}
         for cls, (center, precision, prior) in self.class_stats_.items():
@@ -112,4 +131,3 @@ class LeadingLambdaClassifier:
         frame = X.replace([np.inf, -np.inf], np.nan).copy()
         valid = frame.notna().all(axis=1) & y.notna()
         return frame.loc[valid].astype(float), y.loc[valid].astype(int)
-

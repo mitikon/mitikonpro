@@ -5,6 +5,8 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import os
+import shutil
 from dataclasses import asdict, dataclass
 from datetime import date
 from pathlib import Path
@@ -20,9 +22,17 @@ from .market_calendar import NYSETradingCalendar
 from .model import LeadingLambdaClassifier
 from .signals import REQUIRED_SYMBOLS, build_leading_features, build_training_set
 from .rsi import RSI_FEATURE_VERSION, RSI_PERIODS
+from .recursive_runtime import (
+    bootstrap_state,
+    evaluate_and_rotate_candidate,
+    load_state,
+    register_frozen_trial,
+    settle_pending_trial,
+    write_state,
+)
 
 
-SCHEMA_VERSION = "market-forward-v6"
+SCHEMA_VERSION = "market-forward-v7"
 TRADE_SELECTION_RULE = "maximum_absolute_predicted_return_v1"
 EXTREME_SELECTION_RULE = "predicted_return_extremes_v1"
 TARGET_METADATA: dict[str, tuple[str, str]] = {
@@ -53,6 +63,42 @@ FORWARD_REQUIRED_CLOSE = tuple(
     )
 )
 
+DEFAULT_MODEL_PARAMETERS: dict[str, object] = {
+    "rsi_periods": [5, 7, 14, 21],
+    "rsi_feature_set": ["level", "velocity3", "cross50", "extreme_state"],
+    "rsi_feature_weight": 1.0,
+    "feature_lags": 5,
+    "neutral_band": 0.001,
+    "no_trade_threshold": 0.45,
+}
+
+
+def normalize_model_parameters(
+    parameters: dict[str, object] | None = None,
+) -> dict[str, object]:
+    values = {**DEFAULT_MODEL_PARAMETERS, **(parameters or {})}
+    values["rsi_periods"] = [int(value) for value in values["rsi_periods"]]
+    values["rsi_feature_set"] = [str(value) for value in values["rsi_feature_set"]]
+    values["rsi_feature_weight"] = float(values["rsi_feature_weight"])
+    values["feature_lags"] = int(values["feature_lags"])
+    values["neutral_band"] = float(values["neutral_band"])
+    values["no_trade_threshold"] = float(values["no_trade_threshold"])
+    if not 0.0 <= values["neutral_band"] <= 0.02:
+        raise ValueError("neutral_band must be in [0, 0.02]")
+    if not 0.0 <= values["no_trade_threshold"] <= 1.0:
+        raise ValueError("no_trade_threshold must be in [0, 1]")
+    return values
+
+
+def model_parameters_digest(parameters: dict[str, object]) -> str:
+    payload = json.dumps(
+        normalize_model_parameters(parameters),
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
 
 @dataclass(frozen=True)
 class FrozenMarketSignal:
@@ -81,6 +127,8 @@ class FrozenMarketSignal:
     rsi_feature_version: str
     rsi_periods: tuple[int, ...]
     input_sha256: str
+    model_generation: int
+    model_config_sha256: str
     status: str = "PENDING"
 
 
@@ -120,13 +168,27 @@ def generate_forward_signals(
     calendar: NYSETradingCalendar,
     generated_at_utc: pd.Timestamp | None = None,
     targets: tuple[str, ...] = FORWARD_TARGETS,
-    neutral_band: float = 0.001,
+    neutral_band: float | None = None,
+    model_parameters: dict[str, object] | None = None,
+    model_generation: int = 0,
 ) -> list[FrozenMarketSignal]:
     """Fit only on known outcomes and predict the session after the latest input row."""
+    parameters = normalize_model_parameters(model_parameters)
+    if neutral_band is not None:
+        parameters["neutral_band"] = float(neutral_band)
+    neutral_band = float(parameters["neutral_band"])
+    config_digest = model_parameters_digest(parameters)
     signal_session = _signal_session(dataset)
     close = dataset.close.loc[:signal_session]
     volume = dataset.volume.reindex(close.index)
-    features = build_leading_features(close, volume)
+    features = build_leading_features(
+        close,
+        volume,
+        feature_lags=int(parameters["feature_lags"]),
+        rsi_periods=tuple(parameters["rsi_periods"]),
+        rsi_feature_set=tuple(parameters["rsi_feature_set"]),
+        rsi_feature_weight=float(parameters["rsi_feature_weight"]),
+    )
     latest = features.loc[signal_session].replace([np.inf, -np.inf], np.nan)
     past_features = features.loc[features.index < signal_session]
     past_medians = past_features.median(axis=0, skipna=True)
@@ -162,8 +224,9 @@ def generate_forward_signals(
         model = LeadingLambdaClassifier(
             lambda_reg=0.10,
             variance_target=0.90,
-            no_trade_threshold=0.45,
+            no_trade_threshold=float(parameters["no_trade_threshold"]),
             min_samples=60,
+            feature_family_weights={"rsi": float(parameters["rsi_feature_weight"])},
         ).fit(X, y)
         prediction = model.predict_one(latest)
         class_mean_returns = next_returns.groupby(y).mean().to_dict()
@@ -199,8 +262,10 @@ def generate_forward_signals(
                 variance_target=0.90,
                 neutral_band=neutral_band,
                 rsi_feature_version=RSI_FEATURE_VERSION,
-                rsi_periods=RSI_PERIODS,
+                rsi_periods=tuple(parameters["rsi_periods"]),
                 input_sha256=digest,
+                model_generation=int(model_generation),
+                model_config_sha256=config_digest,
             )
         )
     return records
@@ -294,7 +359,9 @@ def carry_forward_same_session(
     document = json.loads(source.read_text(encoding="utf-8"))
     signals = document.get("signals", [])
     current_session = _signal_session(dataset).date().isoformat()
-    compatible_versions = {"market-forward-v4", "market-forward-v5", SCHEMA_VERSION}
+    compatible_versions = {
+        "market-forward-v4", "market-forward-v5", "market-forward-v6", SCHEMA_VERSION
+    }
     if (
         document.get("schema_version") not in compatible_versions
         or not signals
@@ -829,6 +896,21 @@ def main() -> None:
     parser.add_argument("--previous-history", action="append", default=[])
     parser.add_argument("--trade-history-output", default="artifacts/validation/selected_trade_history.csv")
     parser.add_argument("--previous-trade-history", action="append", default=[])
+    parser.add_argument("--previous-rsi-state", default=None)
+    parser.add_argument("--previous-candidate-signal", default=None)
+    parser.add_argument(
+        "--rsi-state-output",
+        default="artifacts/validation/recursive_rsi_state.json",
+    )
+    parser.add_argument(
+        "--candidate-output",
+        default="artifacts/validation/recursive_rsi_candidate_signal.json",
+    )
+    parser.add_argument(
+        "--candidate-settlement-output",
+        default="artifacts/validation/settled_recursive_rsi_candidate.json",
+    )
+    parser.add_argument("--source-commit", default=os.environ.get("GITHUB_SHA", "0" * 40))
     parser.add_argument("--exceptional-closures", default="config/exceptional_nyse_closures.json")
     args = parser.parse_args()
     calendar = NYSETradingCalendar(exceptional_closures=args.exceptional_closures)
@@ -837,16 +919,103 @@ def main() -> None:
     else:
         completed = calendar.last_completed_session()
         dataset = DailyMarketCollector().collect(args.start, completed.end_exclusive.isoformat())
+    state = (
+        load_state(args.previous_rsi_state)
+        if args.previous_rsi_state
+        else bootstrap_state(DEFAULT_MODEL_PARAMETERS, args.source_commit)
+    )
     path = None
     if args.previous:
         path = carry_forward_same_session(args.previous, dataset, args.output)
-    if path is None:
-        records = generate_forward_signals(dataset, calendar)
-        path = freeze_signals(records, args.output)
-    print(path.read_text(encoding="utf-8"))
+    if path is not None:
+        candidate_path = Path(args.candidate_output)
+        state_path = Path(args.rsi_state_output)
+        candidate_path.parent.mkdir(parents=True, exist_ok=True)
+        state_path.parent.mkdir(parents=True, exist_ok=True)
+        if candidate_path.exists() or state_path.exists():
+            raise FileExistsError("refusing to overwrite same-session RSI artifacts")
+        if args.previous_rsi_state and args.previous_candidate_signal:
+            shutil.copyfile(args.previous_candidate_signal, candidate_path)
+            shutil.copyfile(args.previous_rsi_state, state_path)
+        elif not args.previous_rsi_state and not args.previous_candidate_signal:
+            # Legacy migration on an already-frozen session must not compare a
+            # newly generated challenger against an earlier baseline whose
+            # provider history may since have been revised.  Carry the exact
+            # baseline as a non-evaluated placeholder and begin the first real
+            # candidate trial only after the next completed market session.
+            shutil.copyfile(path, candidate_path)
+            state["migration_status"] = "WAITING_FOR_NEXT_COMPLETED_SESSION"
+            write_state(state, state_path)
+        else:
+            raise ValueError("recursive RSI state and candidate signal must be restored together")
+        print(path.read_text(encoding="utf-8"))
+        carried_history = carry_forward_histories(
+            args.previous_history,
+            args.history_output,
+            deduplicate_by=["signal_session", "target"],
+            sort_by=["signal_session", "target"],
+        )
+        carried_trades = carry_forward_histories(
+            args.previous_trade_history,
+            args.trade_history_output,
+            deduplicate_by=["signal_session"],
+            sort_by=["signal_session", "target"],
+        )
+        print(
+            "same-session RSI artifacts preserved; cumulative history: "
+            f"{carried_history or 'none'}, {carried_trades or 'none'}"
+        )
+        return
+
+    settled = None
+    candidate_settled = None
     if args.previous:
         settled = settle_frozen_signals(args.previous, dataset, args.settlement_output)
         print(f"settlement: {settled or 'pending'}")
+        if args.previous_rsi_state:
+            if not args.previous_candidate_signal:
+                raise ValueError("prior recursive RSI state requires its frozen candidate signal")
+            candidate_settled = settle_frozen_signals(
+                args.previous_candidate_signal,
+                dataset,
+                args.candidate_settlement_output,
+            )
+            if bool(settled) != bool(candidate_settled):
+                raise RuntimeError("baseline and recursive RSI candidate did not settle together")
+            if settled and candidate_settled:
+                settle_pending_trial(
+                    state,
+                    previous_baseline_signal=args.previous,
+                    previous_candidate_signal=args.previous_candidate_signal,
+                    baseline_settlement=settled,
+                    candidate_settlement=candidate_settled,
+                )
+                evaluate_and_rotate_candidate(state, args.source_commit)
+
+    generated_at = pd.Timestamp.now(tz="UTC")
+    active = state["active_model"]
+    candidate = state["candidate"]
+    records = generate_forward_signals(
+        dataset,
+        calendar,
+        generated_at_utc=generated_at,
+        model_parameters=dict(active["parameters"]),
+        model_generation=int(active["generation"]),
+    )
+    path = freeze_signals(records, args.output)
+    candidate_records = generate_forward_signals(
+        dataset,
+        calendar,
+        generated_at_utc=generated_at,
+        model_parameters=dict(candidate["parameters"]),
+        model_generation=int(candidate["generation"]),
+    )
+    candidate_path = freeze_signals(candidate_records, args.candidate_output)
+    register_frozen_trial(state, path, candidate_path)
+    state_path = write_state(state, args.rsi_state_output, args.previous_rsi_state)
+    print(path.read_text(encoding="utf-8"))
+    print(f"recursive RSI: {state_path}, candidate: {candidate_path}")
+    if args.previous:
         if settled:
             report, _, _ = write_signal_result_report(
                 settled,

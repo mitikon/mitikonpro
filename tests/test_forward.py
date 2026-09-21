@@ -67,6 +67,27 @@ def test_forward_signal_uses_latest_row_without_known_outcome(tmp_path):
     ).target
 
 
+def test_recursive_candidate_parameters_reach_the_prediction_model():
+    dataset = sample_dataset()
+    baseline = generate_forward_signals(dataset, FakeCalendar())
+    candidate = generate_forward_signals(
+        dataset,
+        FakeCalendar(),
+        model_parameters={
+            "rsi_periods": [7, 14, 28],
+            "rsi_feature_set": ["level", "velocity3", "cross50"],
+            "rsi_feature_weight": 1.5,
+            "feature_lags": 7,
+            "neutral_band": 0.0015,
+            "no_trade_threshold": 0.50,
+        },
+        model_generation=1,
+    )
+    assert candidate[0].model_generation == 1
+    assert candidate[0].model_config_sha256 != baseline[0].model_config_sha256
+    assert candidate[0].feature_count != baseline[0].feature_count
+
+
 def test_primary_trade_selection_does_not_use_results():
     signals = [
         {"signal_session": "2026-09-09", "target_session": "2026-09-10", "target": "SPY", "target_category": "市場ETF", "target_name": "S&P 500", "predicted_return": 0.01, "confidence": 0.7, "edge": 0.4, "input_sha256": "a"},
