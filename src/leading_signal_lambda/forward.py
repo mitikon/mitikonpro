@@ -938,16 +938,13 @@ def main() -> None:
             shutil.copyfile(args.previous_candidate_signal, candidate_path)
             shutil.copyfile(args.previous_rsi_state, state_path)
         elif not args.previous_rsi_state and not args.previous_candidate_signal:
-            candidate = state["candidate"]
-            candidate_records = generate_forward_signals(
-                dataset,
-                calendar,
-                generated_at_utc=pd.Timestamp.now(tz="UTC"),
-                model_parameters=dict(candidate["parameters"]),
-                model_generation=int(candidate["generation"]),
-            )
-            freeze_signals(candidate_records, candidate_path)
-            register_frozen_trial(state, path, candidate_path)
+            # Legacy migration on an already-frozen session must not compare a
+            # newly generated challenger against an earlier baseline whose
+            # provider history may since have been revised.  Carry the exact
+            # baseline as a non-evaluated placeholder and begin the first real
+            # candidate trial only after the next completed market session.
+            shutil.copyfile(path, candidate_path)
+            state["migration_status"] = "WAITING_FOR_NEXT_COMPLETED_SESSION"
             write_state(state, state_path)
         else:
             raise ValueError("recursive RSI state and candidate signal must be restored together")
