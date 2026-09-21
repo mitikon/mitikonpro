@@ -992,6 +992,17 @@ def main() -> None:
                 )
                 evaluate_and_rotate_candidate(state, args.source_commit)
 
+    if state.get("pending_trial") is not None:
+        # register_frozen_trial() below would refuse a second pending trial
+        # anyway, but it only fails *after* freeze_signals() has already
+        # written this session's immutable forecast files. Fail here instead,
+        # before any new artifact is frozen, so a stalled settlement never
+        # leaves a forward_signal.json orphaned from its recursive RSI state.
+        raise RuntimeError(
+            "recursive RSI trial from the previous run has not settled yet; "
+            "refusing to freeze a new forecast until it does"
+        )
+
     generated_at = pd.Timestamp.now(tz="UTC")
     active = state["active_model"]
     candidate = state["candidate"]

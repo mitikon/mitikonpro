@@ -22,6 +22,7 @@ from .recursive_self_improvement import (
     candidate_manifest_digest,
     parameter_manifest_digest,
     trial_manifest_digest,
+    validate_successor,
 )
 
 
@@ -237,6 +238,8 @@ def write_state(
 def _settlement_metrics(path: str | Path) -> dict[str, object]:
     document = json.loads(Path(path).read_text(encoding="utf-8"))
     settlements = document["settlements"]
+    if not settlements:
+        raise ValueError(f"settlement document has no settled rows: {path}")
     return_error = sum(abs(float(row["return_error"])) for row in settlements) / len(settlements)
     classification_error = 1.0 - (
         sum(bool(row.get("direction_correct", False)) for row in settlements)
@@ -340,6 +343,10 @@ def evaluate_and_rotate_candidate(
     )
     created = (now or datetime.now(timezone.utc)).astimezone(timezone.utc)
     next_candidate = _new_candidate(state, source_commit, created - timedelta(microseconds=1))
+    if promoted:
+        # Belt-and-suspenders: confirm the freshly promoted model_id/generation
+        # actually chains to this report before it becomes the recursive parent.
+        validate_successor(report, next_candidate)
     state["attempt"] = int(state["attempt"]) + 1
     state["candidate"] = next_candidate.sealed_payload()
     state["candidate_manifest_sha256"] = candidate_manifest_digest(next_candidate)
@@ -358,6 +365,10 @@ def register_frozen_trial(
         raise ValueError("a recursive RSI trial is already awaiting its outcome")
     baseline = json.loads(Path(baseline_signal_path).read_text(encoding="utf-8"))
     challenger = json.loads(Path(candidate_signal_path).read_text(encoding="utf-8"))
+    if not baseline.get("signals"):
+        raise ValueError(f"baseline signal document has no frozen signals: {baseline_signal_path}")
+    if not challenger.get("signals"):
+        raise ValueError(f"candidate signal document has no frozen signals: {candidate_signal_path}")
     first = baseline["signals"][0]
     other = challenger["signals"][0]
     if (
