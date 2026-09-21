@@ -1,9 +1,12 @@
 import json
+import sys
 
 import numpy as np
 import pandas as pd
+import pytest
 
 from maintenance_rsi import ExternalDataGuard, MalwareScan, MalwareStatus
+from leading_signal_lambda import forward as forward_module
 from leading_signal_lambda.collector import MarketDataset
 from leading_signal_lambda.forward import (
     FORWARD_TARGETS,
@@ -282,3 +285,201 @@ def test_cumulative_histories_survive_a_run_without_settlement(tmp_path):
     trade_rows = pd.read_csv(trade_output)
     assert len(trade_rows) == 2
     assert trade_rows["signal_session"].is_unique
+
+
+def test_main_cli_bootstraps_and_settles_parallel_candidates(tmp_path, monkeypatch):
+    # main() hardcodes a real NYSETradingCalendar with no injection point, so
+    # this end-to-end CLI test needs the optional [data] extra; it skips
+    # cleanly where that extra isn't installed (e.g. the maintenance-rsi
+    # workflow's [test]-only job) rather than failing there.
+    pytest.importorskip("exchange_calendars")
+    monkeypatch.setattr(
+        ExternalDataGuard,
+        "scan_malware",
+        staticmethod(lambda path: MalwareScan(MalwareStatus.CLEAN, "test", "clean")),
+    )
+
+    day1 = tmp_path / "raw1"
+    sample_dataset(759).save_csv(day1)
+    day2 = tmp_path / "raw2"
+    sample_dataset(760).save_csv(day2)
+
+    art1 = tmp_path / "art1"
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "leading-lambda-forward",
+            "--input-dir", str(day1),
+            "--output", str(art1 / "forward_signal.json"),
+            "--rsi-state-output", str(art1 / "recursive_rsi_state.json"),
+            "--candidate-output", str(art1 / "recursive_rsi_candidate_signal.json"),
+        ],
+    )
+    forward_module.main()
+
+    candidate_paths = [
+        art1 / "recursive_rsi_candidate_signal.json",
+        art1 / "recursive_rsi_candidate_signal_2.json",
+        art1 / "recursive_rsi_candidate_signal_3.json",
+    ]
+    assert all(path.exists() for path in candidate_paths)
+    state_after_bootstrap = json.loads((art1 / "recursive_rsi_state.json").read_text())
+    assert len(state_after_bootstrap["candidate_slots"]) == 3
+
+    art2 = tmp_path / "art2"
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "leading-lambda-forward",
+            "--input-dir", str(day2),
+            "--output", str(art2 / "forward_signal.json"),
+            "--previous", str(art1 / "forward_signal.json"),
+            "--previous-rsi-state", str(art1 / "recursive_rsi_state.json"),
+            "--previous-candidate-signal", str(candidate_paths[0]),
+            "--previous-candidate-signal", str(candidate_paths[1]),
+            "--previous-candidate-signal", str(candidate_paths[2]),
+            "--rsi-state-output", str(art2 / "recursive_rsi_state.json"),
+            "--candidate-output", str(art2 / "recursive_rsi_candidate_signal.json"),
+            "--settlement-output", str(art2 / "settled_previous_signal.json"),
+            "--candidate-settlement-output", str(art2 / "settled_recursive_rsi_candidate.json"),
+            "--report-output", str(art2 / "signal_result_report.json"),
+            "--report-markdown-output", str(art2 / "signal_result_report.md"),
+            "--report-rows-output", str(art2 / "signal_result_rows.csv"),
+            "--history-output", str(art2 / "signal_result_history.csv"),
+            "--trade-history-output", str(art2 / "selected_trade_history.csv"),
+        ],
+    )
+    forward_module.main()
+
+    assert (art2 / "settled_recursive_rsi_candidate.json").exists()
+    assert (art2 / "settled_recursive_rsi_candidate_2.json").exists()
+    assert (art2 / "settled_recursive_rsi_candidate_3.json").exists()
+    state_after_settle = json.loads((art2 / "recursive_rsi_state.json").read_text())
+    assert [len(slot["evaluations"]) for slot in state_after_settle["candidate_slots"]] == [1, 1, 1]
+    assert all(slot["pending_trial"] is not None for slot in state_after_settle["candidate_slots"])
+
+
+def test_main_cli_migrates_a_legacy_single_candidate_state_on_first_run(tmp_path, monkeypatch):
+    # Simulates the exact transition the live daily pipeline goes through on
+    # its first run after parallel candidates are deployed: an existing v1
+    # schema_version state with exactly one prior candidate forecast, now
+    # asked to run against a CLI/runtime that wants PARALLEL_CANDIDATES
+    # slots. The single carried-over slot must settle normally; the freshly
+    # padded slots must be skipped (no prior forecast to compare), not
+    # treated as an error; and every slot must end the run with a fresh
+    # pending trial so nothing is left unregistered.
+    pytest.importorskip("exchange_calendars")
+    monkeypatch.setattr(
+        ExternalDataGuard,
+        "scan_malware",
+        staticmethod(lambda path: MalwareScan(MalwareStatus.CLEAN, "test", "clean")),
+    )
+    from datetime import datetime, timedelta, timezone
+
+    from leading_signal_lambda.forward import DEFAULT_MODEL_PARAMETERS
+    from leading_signal_lambda.recursive_runtime import (
+        LEGACY_RUNTIME_SCHEMA_VERSION,
+        PARALLEL_CANDIDATES,
+        _new_candidate,
+        candidate_manifest_digest,
+        register_frozen_trials,
+        write_state,
+    )
+
+    day1 = tmp_path / "raw1"
+    dataset1 = sample_dataset(759)
+    dataset1.save_csv(day1)
+    day2 = tmp_path / "raw2"
+    sample_dataset(760).save_csv(day2)
+
+    created = datetime(2026, 9, 15, tzinfo=timezone.utc)
+    legacy_state = {
+        "schema_version": LEGACY_RUNTIME_SCHEMA_VERSION,
+        "active_model": {
+            "model_id": "market-forward-v7-baseline",
+            "generation": 0,
+            "parameters": dict(DEFAULT_MODEL_PARAMETERS),
+            "promotion_report_sha256": None,
+        },
+        "attempt": 0,
+        "candidate": None,
+        "candidate_manifest_sha256": None,
+        "trials": [],
+        "evaluations": [],
+        "pending_trial": None,
+        "completed_candidates": [],
+        "previous_state_sha256": None,
+        "updated_at": created.isoformat(),
+    }
+    legacy_candidate = _new_candidate(legacy_state, "a" * 40, created - timedelta(microseconds=1))
+    legacy_state["attempt"] = 1
+    legacy_state["candidate"] = legacy_candidate.sealed_payload()
+    legacy_state["candidate_manifest_sha256"] = candidate_manifest_digest(legacy_candidate)
+
+    art1 = tmp_path / "art1"
+    art1.mkdir()
+    generated_at = pd.Timestamp("2026-09-16T02:15:00Z")
+    baseline_records = generate_forward_signals(
+        dataset1, FakeCalendar(), generated_at_utc=generated_at,
+        model_parameters=dict(legacy_state["active_model"]["parameters"]), model_generation=0,
+    )
+    baseline_path = freeze_signals(baseline_records, art1 / "forward_signal.json")
+    candidate_records = generate_forward_signals(
+        dataset1, FakeCalendar(), generated_at_utc=generated_at,
+        model_parameters=dict(legacy_candidate.parameters), model_generation=1,
+    )
+    candidate_path = freeze_signals(candidate_records, art1 / "recursive_rsi_candidate_signal.json")
+
+    # Register the legacy trial the way a real v1 run would have.
+    registration_state = {
+        **legacy_state,
+        "candidate_slots": [
+            {
+                "attempt": 1,
+                "candidate": legacy_state["candidate"],
+                "candidate_manifest_sha256": legacy_state["candidate_manifest_sha256"],
+                "trials": [],
+                "evaluations": [],
+                "pending_trial": None,
+            }
+        ],
+    }
+    register_frozen_trials(registration_state, baseline_path, [candidate_path])
+    legacy_state["pending_trial"] = registration_state["candidate_slots"][0]["pending_trial"]
+    legacy_state["trials"] = registration_state["candidate_slots"][0]["trials"]
+    legacy_state_path = write_state(legacy_state, art1 / "recursive_rsi_state.json")
+
+    art2 = tmp_path / "art2"
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "leading-lambda-forward",
+            "--input-dir", str(day2),
+            "--output", str(art2 / "forward_signal.json"),
+            "--previous", str(baseline_path),
+            "--previous-rsi-state", str(legacy_state_path),
+            "--previous-candidate-signal", str(candidate_path),
+            "--rsi-state-output", str(art2 / "recursive_rsi_state.json"),
+            "--candidate-output", str(art2 / "recursive_rsi_candidate_signal.json"),
+            "--settlement-output", str(art2 / "settled_previous_signal.json"),
+            "--candidate-settlement-output", str(art2 / "settled_recursive_rsi_candidate.json"),
+            "--report-output", str(art2 / "signal_result_report.json"),
+            "--report-markdown-output", str(art2 / "signal_result_report.md"),
+            "--report-rows-output", str(art2 / "signal_result_rows.csv"),
+            "--history-output", str(art2 / "signal_result_history.csv"),
+            "--trade-history-output", str(art2 / "selected_trade_history.csv"),
+        ],
+    )
+    forward_module.main()
+
+    state2 = json.loads((art2 / "recursive_rsi_state.json").read_text())
+    assert state2["schema_version"] == "market-recursive-runtime-v2"
+    assert state2["migrated_from"] == LEGACY_RUNTIME_SCHEMA_VERSION
+    assert len(state2["candidate_slots"]) == PARALLEL_CANDIDATES
+    evaluations_per_slot = [len(slot["evaluations"]) for slot in state2["candidate_slots"]]
+    assert evaluations_per_slot[0] == 1
+    assert evaluations_per_slot[1:] == [0] * (PARALLEL_CANDIDATES - 1)
+    assert all(slot["pending_trial"] is not None for slot in state2["candidate_slots"])

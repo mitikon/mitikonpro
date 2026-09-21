@@ -23,11 +23,13 @@ from .model import LeadingLambdaClassifier
 from .signals import REQUIRED_SYMBOLS, build_leading_features, build_training_set
 from .rsi import RSI_FEATURE_VERSION, RSI_PERIODS
 from .recursive_runtime import (
+    PARALLEL_CANDIDATES,
     bootstrap_state,
-    evaluate_and_rotate_candidate,
+    ensure_candidate_slots,
+    evaluate_and_rotate_candidates,
     load_state,
-    register_frozen_trial,
-    settle_pending_trial,
+    register_frozen_trials,
+    settle_pending_trials,
     write_state,
 )
 
@@ -882,6 +884,20 @@ def load_dataset(directory: str | Path) -> MarketDataset:
     return MarketDataset(close=close.sort_index(), volume=volume.reindex(close.index).sort_index())
 
 
+def _slot_path(base: str | Path, slot_index: int) -> Path:
+    """Derive the Nth parallel candidate's file path from a base path.
+
+    Slot 0 keeps the exact base filename (preserving the pre-parallel
+    artifact name for continuity with existing workflow/history tooling);
+    later slots insert a 1-based suffix before the extension, e.g.
+    "..._2.json", "..._3.json".
+    """
+    base = Path(base)
+    if slot_index == 0:
+        return base
+    return base.with_name(f"{base.stem}_{slot_index + 1}{base.suffix}")
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="Freeze next-session market signals")
     parser.add_argument("--start", default="2015-01-01")
@@ -897,7 +913,12 @@ def main() -> None:
     parser.add_argument("--trade-history-output", default="artifacts/validation/selected_trade_history.csv")
     parser.add_argument("--previous-trade-history", action="append", default=[])
     parser.add_argument("--previous-rsi-state", default=None)
-    parser.add_argument("--previous-candidate-signal", default=None)
+    parser.add_argument(
+        "--previous-candidate-signal",
+        action="append",
+        default=[],
+        help="repeatable; one per parallel candidate slot, in slot order",
+    )
     parser.add_argument(
         "--rsi-state-output",
         default="artifacts/validation/recursive_rsi_state.json",
@@ -905,6 +926,7 @@ def main() -> None:
     parser.add_argument(
         "--candidate-output",
         default="artifacts/validation/recursive_rsi_candidate_signal.json",
+        help="base path for slot 1; later parallel slots derive _2/_3-suffixed paths",
     )
     parser.add_argument(
         "--candidate-settlement-output",
@@ -924,30 +946,54 @@ def main() -> None:
         if args.previous_rsi_state
         else bootstrap_state(DEFAULT_MODEL_PARAMETERS, args.source_commit)
     )
+    generated_at = pd.Timestamp.now(tz="UTC")
+    # A state just migrated from the single-candidate schema carries only one
+    # slot; top it up to the full parallel pool before anything else touches it.
+    ensure_candidate_slots(
+        state, args.source_commit, generated_at.to_pydatetime(), parallel_candidates=PARALLEL_CANDIDATES
+    )
+    candidate_outputs = [_slot_path(args.candidate_output, i) for i in range(len(state["candidate_slots"]))]
+    candidate_settlement_outputs = [
+        _slot_path(args.candidate_settlement_output, i) for i in range(len(state["candidate_slots"]))
+    ]
+
     path = None
     if args.previous:
         path = carry_forward_same_session(args.previous, dataset, args.output)
     if path is not None:
-        candidate_path = Path(args.candidate_output)
         state_path = Path(args.rsi_state_output)
-        candidate_path.parent.mkdir(parents=True, exist_ok=True)
         state_path.parent.mkdir(parents=True, exist_ok=True)
-        if candidate_path.exists() or state_path.exists():
+        for candidate_output in candidate_outputs:
+            candidate_output.parent.mkdir(parents=True, exist_ok=True)
+        if any(output.exists() for output in candidate_outputs) or state_path.exists():
             raise FileExistsError("refusing to overwrite same-session RSI artifacts")
         if args.previous_rsi_state and args.previous_candidate_signal:
-            shutil.copyfile(args.previous_candidate_signal, candidate_path)
+            if len(args.previous_candidate_signal) > len(candidate_outputs):
+                raise ValueError(
+                    f"got {len(args.previous_candidate_signal)} --previous-candidate-signal values "
+                    f"but only {len(candidate_outputs)} parallel slots exist"
+                )
+            for source, destination in zip(args.previous_candidate_signal, candidate_outputs):
+                shutil.copyfile(source, destination)
+            # A slot padded on top of a state migrated from fewer historical
+            # slots has no prior candidate forecast to carry forward; give it
+            # the same baseline placeholder as the fully-legacy branch below.
+            for destination in candidate_outputs[len(args.previous_candidate_signal):]:
+                shutil.copyfile(path, destination)
             shutil.copyfile(args.previous_rsi_state, state_path)
         elif not args.previous_rsi_state and not args.previous_candidate_signal:
             # Legacy migration on an already-frozen session must not compare a
             # newly generated challenger against an earlier baseline whose
             # provider history may since have been revised.  Carry the exact
-            # baseline as a non-evaluated placeholder and begin the first real
-            # candidate trial only after the next completed market session.
-            shutil.copyfile(path, candidate_path)
+            # baseline as a non-evaluated placeholder for every parallel slot
+            # and begin real candidate trials only after the next completed
+            # market session.
+            for candidate_output in candidate_outputs:
+                shutil.copyfile(path, candidate_output)
             state["migration_status"] = "WAITING_FOR_NEXT_COMPLETED_SESSION"
             write_state(state, state_path)
         else:
-            raise ValueError("recursive RSI state and candidate signal must be restored together")
+            raise ValueError("recursive RSI state and candidate signals must be restored together")
         print(path.read_text(encoding="utf-8"))
         carried_history = carry_forward_histories(
             args.previous_history,
@@ -968,32 +1014,46 @@ def main() -> None:
         return
 
     settled = None
-    candidate_settled = None
+    candidate_settled_paths: list[Path | None] = []
     if args.previous:
         settled = settle_frozen_signals(args.previous, dataset, args.settlement_output)
         print(f"settlement: {settled or 'pending'}")
         if args.previous_rsi_state:
             if not args.previous_candidate_signal:
-                raise ValueError("prior recursive RSI state requires its frozen candidate signal")
-            candidate_settled = settle_frozen_signals(
-                args.previous_candidate_signal,
-                dataset,
-                args.candidate_settlement_output,
-            )
-            if bool(settled) != bool(candidate_settled):
-                raise RuntimeError("baseline and recursive RSI candidate did not settle together")
-            if settled and candidate_settled:
-                settle_pending_trial(
+                raise ValueError("prior recursive RSI state requires its frozen candidate signals")
+            if len(args.previous_candidate_signal) > len(state["candidate_slots"]):
+                raise ValueError(
+                    f"got {len(args.previous_candidate_signal)} --previous-candidate-signal values "
+                    f"but only {len(state['candidate_slots'])} parallel slots exist"
+                )
+            provided = len(args.previous_candidate_signal)
+            # A state just topped up from fewer historical slots (e.g. right
+            # after migrating from the single-candidate schema) has no prior
+            # forecast for its newly padded slots; settle only the slots that
+            # actually have history instead of treating the shorter list as
+            # an error.
+            real_candidate_settled = [
+                settle_frozen_signals(source, dataset, destination)
+                for source, destination in zip(
+                    args.previous_candidate_signal, candidate_settlement_outputs[:provided]
+                )
+            ]
+            if any(bool(settled) != bool(candidate_settled) for candidate_settled in real_candidate_settled):
+                raise RuntimeError("baseline and recursive RSI candidates did not settle together")
+            padding = len(state["candidate_slots"]) - provided
+            candidate_settled_paths = real_candidate_settled + [None] * padding
+            if settled and all(real_candidate_settled):
+                settle_pending_trials(
                     state,
                     previous_baseline_signal=args.previous,
-                    previous_candidate_signal=args.previous_candidate_signal,
+                    previous_candidate_signals=list(args.previous_candidate_signal) + [None] * padding,
                     baseline_settlement=settled,
-                    candidate_settlement=candidate_settled,
+                    candidate_settlements=candidate_settled_paths,
                 )
-                evaluate_and_rotate_candidate(state, args.source_commit)
+                evaluate_and_rotate_candidates(state, args.source_commit)
 
-    if state.get("pending_trial") is not None:
-        # register_frozen_trial() below would refuse a second pending trial
+    if any(slot.get("pending_trial") is not None for slot in state["candidate_slots"]):
+        # register_frozen_trials() below would refuse a second pending trial
         # anyway, but it only fails *after* freeze_signals() has already
         # written this session's immutable forecast files. Fail here instead,
         # before any new artifact is frozen, so a stalled settlement never
@@ -1003,9 +1063,7 @@ def main() -> None:
             "refusing to freeze a new forecast until it does"
         )
 
-    generated_at = pd.Timestamp.now(tz="UTC")
     active = state["active_model"]
-    candidate = state["candidate"]
     records = generate_forward_signals(
         dataset,
         calendar,
@@ -1014,18 +1072,21 @@ def main() -> None:
         model_generation=int(active["generation"]),
     )
     path = freeze_signals(records, args.output)
-    candidate_records = generate_forward_signals(
-        dataset,
-        calendar,
-        generated_at_utc=generated_at,
-        model_parameters=dict(candidate["parameters"]),
-        model_generation=int(candidate["generation"]),
-    )
-    candidate_path = freeze_signals(candidate_records, args.candidate_output)
-    register_frozen_trial(state, path, candidate_path)
+    candidate_paths = []
+    for slot, candidate_output in zip(state["candidate_slots"], candidate_outputs):
+        candidate = slot["candidate"]
+        candidate_records = generate_forward_signals(
+            dataset,
+            calendar,
+            generated_at_utc=generated_at,
+            model_parameters=dict(candidate["parameters"]),
+            model_generation=int(candidate["generation"]),
+        )
+        candidate_paths.append(freeze_signals(candidate_records, candidate_output))
+    register_frozen_trials(state, path, candidate_paths)
     state_path = write_state(state, args.rsi_state_output, args.previous_rsi_state)
     print(path.read_text(encoding="utf-8"))
-    print(f"recursive RSI: {state_path}, candidate: {candidate_path}")
+    print(f"recursive RSI: {state_path}, candidates: {candidate_paths}")
     if args.previous:
         if settled:
             report, _, _ = write_signal_result_report(

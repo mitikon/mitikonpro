@@ -71,17 +71,23 @@ SPYとQQQについて、ウォークフォワード予測を時点固定CSVに�
 
 ## RSI再帰的自己改善（Recursive Self-Improvement）直結運転
 
-相対力指数RSIとは別に、`MarketRecursiveImprovementGate`と`recursive_runtime`が改善候補を世代管理します。候補の設定・親世代・Gitコミットを固定し、各営業日の入力、現行予測、候補予測、候補マニフェストを結果判明前にSHA-256付きでFreezeします。その後に発生した20営業日以上の正式結果だけで現行版と比較し、予測ファイル・試行記録・状態履歴のハッシュ不一致は学習対象にできません。
+相対力指数RSIとは別に、`MarketRecursiveImprovementGate`と`recursive_runtime`が改善候補を世代管理します。候補の設定・親世代・Gitコミットを固定し、各営業日の入力、現行予測、候補予測、候補マニフェストを結果判明前にSHA-256付きでFreezeします。
+
+**逐次検定（Sequential Evidence）**: 損失改善の判定は固定閾値ではなく、`sequential_loss_improvement_test`によるWald SPRT（逐次確率比検定）で行います。誤って昇格させる確率（既定5%）と誤って棄却する確率（既定10%）を明示的に制御し、ノイズによる偽陽性を抑えます。統計的に明確に劣る候補は、20営業日の全期間を待たず（最短5営業日から）早期棄却できます。ただし昇格は必ず20営業日以上の全期間評価を経てからのみ行われ、部分的な期間での昇格は一切ありません。
+
+**並列候補探索**: `PARALLEL_CANDIDATES`（既定3）個の候補を同じ営業日・同じ現行版に対して同時に検証します。1つの候補だけが劣ると判明するたびに次の候補へ差し替えるのではなく、複数の変異方向を並行して試すことで探索を高速化します。同一サイクルで複数候補が`PROMOTION_PROPOSED`に達した場合は、損失改善が最大の1件だけを実際に採用し、他は「合格したが不採用」として正直に記録します（`parameter_promotion_applied`）。
 
 平均損失、最大上昇ETF・最大下落ETFの選出、取引コスト控除後収益、最大ドローダウンの全条件を通過した場合だけ`PROMOTION_PROPOSED`を出し、許可されたモデル設定を次回の正式予測へ自動昇格します。不合格候補は棄却し、別の候補を結果未確認の状態から検証します。この探索はGitHub Actionsの日次処理で永久に継続します。
 
 自律更新の対象はRSI期間、RSI特徴量、RSI重み、特徴量ラグ、中立帯、売買判定閾値だけです。固定中核の`lambda_reg=0.10`、`variance_target=0.90`、`min_samples=60`、ソースコード、`main`ブランチ、実売買は自動変更しません。ソース更新は従来どおりPRと全テストを必要とします。
 
-各成果物には次を保存します。
+各成果物には次を保存します（並列候補ごとに1つ; 2番目以降は`_2`・`_3`をファイル名に付与）。
 
 - `forward_signal.json`: 現行世代の翌営業日予測
-- `recursive_rsi_candidate_signal.json`: 改善候補の同時予測
-- `recursive_rsi_state.json`: 世代、候補、事前試行、結果評価、状態ハッシュ連鎖
-- `settled_recursive_rsi_candidate.json`: 翌営業日に確定した候補結果
+- `recursive_rsi_candidate_signal.json` / `_2` / `_3`: 各並列候補の同時予測
+- `recursive_rsi_state.json`: 世代、並列候補（`candidate_slots`）、事前試行、結果評価、状態ハッシュ連鎖
+- `settled_recursive_rsi_candidate.json` / `_2` / `_3`: 翌営業日に確定した各候補結果
 
 同じ市場確定日で再実行された場合は最初の予測・候補・RSI状態をそのまま継承し、再計算や二重学習を行いません。
+
+旧スキーマ（`market-recursive-runtime-v1`、候補1つのみ）の状態ファイルは、読み込み時に自動的に`market-recursive-runtime-v2`（並列候補）へ移行します。移行直後の初回実行では、引き継いだ1候補だけを決済し、新設のスロットは履歴なしとして扱われ、その回はエラーになりません。
