@@ -109,6 +109,50 @@ def test_twenty_future_only_trials_promote_and_start_next_generation(tmp_path):
     assert state["completed_candidates"][-1]["parameter_promotion_applied"] is True
 
 
+def test_settle_pending_trial_rejects_settlement_with_no_rows(tmp_path):
+    created = datetime(2026, 9, 15, tzinfo=UTC)
+    state = bootstrap_state(DEFAULT_MODEL_PARAMETERS, COMMIT, created)
+    frozen = created + timedelta(days=1)
+    baseline = _signal(tmp_path / "baseline.json", frozen, frozen + timedelta(days=1), 0.01)
+    candidate = _signal(tmp_path / "candidate.json", frozen, frozen + timedelta(days=1), 0.02)
+    register_frozen_trial(state, baseline, candidate)
+
+    empty_settlement = tmp_path / "empty-settlement.json"
+    empty_settlement.write_text(
+        json.dumps(
+            {
+                "settlements": [],
+                "primary_trade": {"gross_return_before_cost": 0.0},
+                "extreme_forecasts": {
+                    "upside": {"exact_target_hit": False},
+                    "downside": {"exact_target_hit": False},
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    with pytest.raises(ValueError, match="no settled rows"):
+        settle_pending_trial(
+            state,
+            previous_baseline_signal=baseline,
+            previous_candidate_signal=candidate,
+            baseline_settlement=empty_settlement,
+            candidate_settlement=empty_settlement,
+            outcome_known_at=frozen + timedelta(days=2),
+        )
+
+
+def test_register_frozen_trial_rejects_document_with_no_signals(tmp_path):
+    created = datetime(2026, 9, 15, tzinfo=UTC)
+    state = bootstrap_state(DEFAULT_MODEL_PARAMETERS, COMMIT, created)
+    baseline = tmp_path / "baseline.json"
+    baseline.write_text(json.dumps({"signals": []}), encoding="utf-8")
+    candidate = tmp_path / "candidate.json"
+    candidate.write_text(json.dumps({"signals": []}), encoding="utf-8")
+    with pytest.raises(ValueError, match="no frozen signals"):
+        register_frozen_trial(state, baseline, candidate)
+
+
 def test_frozen_forecast_tampering_blocks_learning(tmp_path):
     created = datetime(2026, 9, 15, tzinfo=UTC)
     state = bootstrap_state(DEFAULT_MODEL_PARAMETERS, COMMIT, created)
