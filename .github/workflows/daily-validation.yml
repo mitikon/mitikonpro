@@ -70,10 +70,22 @@ jobs:
           START_DATE: ${{ inputs.start_date || '2015-01-01' }}
         run: |
           previous=$(find artifacts/previous/latest -name forward_signal.json -print -quit 2>/dev/null || true)
+          previous_rsi_state=$(find artifacts/previous/latest -name recursive_rsi_state.json -print -quit 2>/dev/null || true)
+          # One file per parallel candidate slot: the base name for slot 1
+          # and "_2"/"_3"-suffixed names for the others (see forward.py's
+          # _slot_path). Sorting is lexicographic, and "." sorts before "_"
+          # so the base file always lists first, in slot order.
+          mapfile -t previous_candidates < <(find artifacts/previous/latest -name 'recursive_rsi_candidate_signal*.json' -print 2>/dev/null | sort)
           mapfile -t previous_histories < <(find artifacts/history-sources -name signal_result_history.csv -print 2>/dev/null | sort)
           mapfile -t previous_trade_histories < <(find artifacts/history-sources -name selected_trade_history.csv -print 2>/dev/null | sort)
           if [ -n "$previous" ]; then
             args=(--input-dir artifacts/validation/raw --output artifacts/validation/forward_signal.json --previous "$previous")
+            if [ -n "$previous_rsi_state" ]; then
+              args+=(--previous-rsi-state "$previous_rsi_state")
+            fi
+            for candidate in "${previous_candidates[@]}"; do
+              args+=(--previous-candidate-signal "$candidate")
+            done
             for history in "${previous_histories[@]}"; do
               args+=(--previous-history "$history")
             done

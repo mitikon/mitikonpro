@@ -54,7 +54,8 @@ class AuditReport:
             "autonomous_source_edits": False,
             "autonomous_main_merge": False,
             "trading_authority": False,
-            "recursive_rsi_autonomous_promotion": False,
+            "recursive_rsi_autonomous_parameter_promotion": True,
+            "recursive_rsi_autonomous_source_promotion": False,
         }
 
 
@@ -115,7 +116,8 @@ def _check_core(root: Path) -> list[AuditFinding]:
     paper_path = root / "src/leading_signal_lambda/paper_pca_sub.py"
     recursive_path = root / "src/leading_signal_lambda/recursive_self_improvement.py"
     error_classification_path = root / "src/leading_signal_lambda/error_classification.py"
-    for path in (model_path, paper_path, recursive_path, error_classification_path):
+    runtime_path = root / "src/leading_signal_lambda/recursive_runtime.py"
+    for path in (model_path, paper_path, recursive_path, error_classification_path, runtime_path):
         if not path.is_file():
             findings.append(AuditFinding("CORE_FILE_MISSING", Severity.CRITICAL, "required core file is missing", str(path)))
     if findings:
@@ -181,7 +183,34 @@ def _check_core(root: Path) -> list[AuditFinding]:
                     str(error_classification_path),
                 )
             )
+    runtime_text = runtime_path.read_text(encoding="utf-8")
+    for required_runtime_guard in (
+        "MarketRecursiveImprovementGate",
+        "baseline forecast changed after recursive RSI freeze",
+        "candidate forecast changed after recursive RSI freeze",
+        '"parameter_promotion_applied": applied',
+    ):
+        if required_runtime_guard not in runtime_text:
+            findings.append(
+                AuditFinding(
+                    "RECURSIVE_RSI_RUNTIME_GUARD_REMOVED",
+                    Severity.CRITICAL,
+                    f"required recursive RSI runtime guard is missing: {required_runtime_guard}",
+                    str(runtime_path),
+                )
+            )
     return findings
+
+
+def _value_chain_identifiers(node: ast.AST) -> list[str]:
+    """Names touched by a (possibly chained) attribute access, e.g. ``self.pickle`` -> ["pickle", "self"]."""
+    identifiers: list[str] = []
+    while isinstance(node, ast.Attribute):
+        identifiers.append(node.attr)
+        node = node.value
+    if isinstance(node, ast.Name):
+        identifiers.append(node.id)
+    return identifiers
 
 
 def _dangerous_call_findings(tree: ast.AST, path: Path) -> list[AuditFinding]:
@@ -200,10 +229,13 @@ def _dangerous_call_findings(tree: ast.AST, path: Path) -> list[AuditFinding]:
                         str(path),
                     )
                 )
-            if isinstance(func.value, ast.Name):
-                message = _BANNED_QUALIFIED_CALLS.get((func.value.id, func.attr))
+            # Not just a bare `module.attr(...)`: also catch attribute-chained
+            # access to a banned module, e.g. `self.pickle.load(...)`.
+            for module_name in _value_chain_identifiers(func.value):
+                message = _BANNED_QUALIFIED_CALLS.get((module_name, func.attr))
                 if message is not None:
                     findings.append(AuditFinding("DANGEROUS_SOURCE_PATTERN", Severity.HIGH, message, str(path)))
+                    break
         for keyword in node.keywords:
             if (
                 keyword.arg == "shell"
@@ -315,6 +347,7 @@ def audit_repository(root: str | Path) -> AuditReport:
             "high_confidence_secret_scan",
             "recursive_rsi_human_promotion_gate",
             "error_classification_anti_overfitting_guard",
+            "recursive_rsi_future_only_parameter_promotion_gate",
         ),
     )
 
