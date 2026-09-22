@@ -23,8 +23,6 @@ jobs:
           cache: pip
       - run: python -m pip install '.[data,test]'
       - run: python -m pytest -q
-      - name: Collect completed market data
-        run: leading-lambda-validate --start 2015-01-01 --output artifacts/independent
       - name: Restore prior immutable loop records
         continue-on-error: true
         env:
@@ -35,7 +33,23 @@ jobs:
           for run_id in "${run_ids[@]}"; do
             gh run download "$run_id" --repo "$GITHUB_REPOSITORY" --pattern 'independent-market-rsi-*' --dir "artifacts/prior/$run_id" || true
           done
+      - name: Check XNYS trading calendar
+        id: market_calendar
+        shell: bash
+        run: |
+          latest_prior=$(find artifacts/prior -mindepth 1 -maxdepth 1 -type d -printf '%f\n' | sort -rn | head -1)
+          previous=$(find "artifacts/prior/$latest_prior" -name 'forecast.json' -print -quit 2>/dev/null || true)
+          previous_args=()
+          if [ -n "$previous" ]; then previous_args=(--previous "$previous"); fi
+          leading-lambda-independent calendar-check "${previous_args[@]}"
+      - name: Record non-trading-day skip
+        if: steps.market_calendar.outputs.should_run != 'true'
+        run: echo "No new completed XNYS session; learning loop skipped without changing state."
+      - name: Collect completed market data
+        if: steps.market_calendar.outputs.should_run == 'true'
+        run: leading-lambda-validate --start 2015-01-01 --output artifacts/independent
       - name: Settle, learn and freeze the next independent signal
+        if: steps.market_calendar.outputs.should_run == 'true'
         shell: bash
         run: |
           latest_prior=$(find artifacts/prior -mindepth 1 -maxdepth 1 -type d -printf '%f\n' | sort -rn | head -1)
@@ -52,6 +66,7 @@ jobs:
           leading-lambda-independent learn "${state_args[@]}" "${settlements[@]}" --state-output artifacts/independent/loop/state.json --report-output artifacts/independent/loop/learning_report.json
           leading-lambda-independent forecast --input-dir artifacts/independent/raw --state artifacts/independent/loop/state.json --output artifacts/independent/loop/forecast.json
       - name: Upload reports and immutable learning records
+        if: steps.market_calendar.outputs.should_run == 'true'
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: independent-market-rsi-${{ github.run_number }}
