@@ -11,6 +11,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import os
 from pathlib import Path
 from typing import Iterable
 
@@ -68,6 +69,33 @@ def load_state(path: str | Path | None) -> dict[str, object]:
     if state.get("schema_version") != SCHEMA_VERSION:
         raise ValueError("unsupported independent RSI state")
     return state
+
+
+def calendar_run_decision(
+    calendar: NYSETradingCalendar,
+    previous_forecast: str | Path | None = None,
+    now_utc: pd.Timestamp | None = None,
+) -> dict[str, object]:
+    """Allow one learning cycle per completed XNYS session, never per cron tick."""
+    completed = calendar.last_completed_session(now_utc)
+    previous_session = None
+    if previous_forecast and Path(previous_forecast).exists():
+        previous = json.loads(Path(previous_forecast).read_text(encoding="utf-8"))
+        previous_session = previous.get("signal_session")
+        if previous_session is None:
+            raise ValueError("previous forecast has no signal_session")
+        pd.Timestamp(previous_session).date()
+    should_run = previous_session is None or completed.session_date > pd.Timestamp(previous_session).date()
+    return {
+        "schema_version": SCHEMA_VERSION,
+        "calendar": "XNYS",
+        "completed_session": completed.session_date.isoformat(),
+        "completed_session_close_utc": completed.close_utc.isoformat(),
+        "previous_signal_session": previous_session,
+        "next_session": calendar.next_session(completed.session_date).isoformat(),
+        "should_run": should_run,
+        "reason": "NEW_COMPLETED_SESSION" if should_run else "ALREADY_PROCESSED_OR_MARKET_CLOSED",
+    }
 
 
 def freeze_shadow_forecasts(dataset, calendar, state: dict[str, object], output: str | Path) -> Path:
@@ -230,6 +258,10 @@ def main() -> None:
     report = sub.add_parser("report")
     report.add_argument("--date", required=True)
     report.add_argument("--settlement", action="append", default=[])
+    gate = sub.add_parser("calendar-check")
+    gate.add_argument("--previous")
+    gate.add_argument("--now-utc")
+    gate.add_argument("--exceptional-closures", default="config/exceptional_nyse_closures.json")
     args = parser.parse_args()
     if args.command == "forecast":
         result = freeze_shadow_forecasts(load_dataset(args.input_dir), NYSETradingCalendar(exceptional_closures=args.exceptional_closures), load_state(args.state), args.output)
@@ -243,8 +275,20 @@ def main() -> None:
         Path(args.state_output).write_text(json.dumps(state, ensure_ascii=False, indent=2), encoding="utf-8")
         _write_once(Path(args.report_output), report_value)
         print(json.dumps(report_value, ensure_ascii=False, indent=2))
-    else:
+    elif args.command == "report":
         print(json.dumps(report_for_date(args.settlement, args.date), ensure_ascii=False, indent=2))
+    else:
+        calendar = NYSETradingCalendar(exceptional_closures=args.exceptional_closures)
+        now = pd.Timestamp(args.now_utc) if args.now_utc else None
+        decision = calendar_run_decision(calendar, args.previous, now)
+        output = os.environ.get("GITHUB_OUTPUT")
+        if output:
+            with Path(output).open("a", encoding="utf-8") as stream:
+                stream.write(f"should_run={str(decision['should_run']).lower()}\n")
+                stream.write(f"completed_session={decision['completed_session']}\n")
+                stream.write(f"next_session={decision['next_session']}\n")
+                stream.write(f"reason={decision['reason']}\n")
+        print(json.dumps(decision, ensure_ascii=False, indent=2))
 
 
 if __name__ == "__main__":
