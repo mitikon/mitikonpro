@@ -2,7 +2,12 @@
 
 from .model import LeadingLambdaClassifier, Prediction
 from .signals import build_leading_features, build_training_set
-from .rsi import RSI_FEATURE_VERSION, RSI_PERIODS, build_rsi_features, calculate_rsi
+from .relative_strength_feature import (
+    RELATIVE_STRENGTH_FEATURE_VERSION,
+    RELATIVE_STRENGTH_PERIODS,
+    build_relative_strength_features,
+    calculate_relative_strength_index,
+)
 from .recursive_self_improvement import (
     RECURSIVE_SELF_IMPROVEMENT_VERSION,
     MarketFutureEvaluation,
@@ -12,6 +17,7 @@ from .recursive_self_improvement import (
     MarketRsiCandidate,
     SequentialEvidence,
     candidate_manifest_digest,
+    canonicalize_parameter_keys,
     freeze_candidate,
     freeze_trial,
     freeze_promotion_report,
@@ -19,6 +25,21 @@ from .recursive_self_improvement import (
     sequential_loss_improvement_test,
     trial_manifest_digest,
     validate_successor,
+)
+from .error_classification import (
+    ERROR_CATEGORIES,
+    EXTRACTION_MISS,
+    FINAL_EXCLUSION,
+    MARKET_NOISE,
+    MISSING_INPUT,
+    MIN_RATIONALE_SESSIONS,
+    OVERESTIMATION,
+    CandidateRationale,
+    classify_extreme_selection,
+    classify_target_settlement,
+    freeze_candidate_rationale,
+    rationale_manifest_digest,
+    summarize_error_classification,
 )
 from .validation import WalkForwardResult, walk_forward_validate
 from .collector import DailyMarketCollector, MarketDataset, DEFAULT_UNIVERSE
@@ -31,8 +52,8 @@ __all__ = [
     "WalkForwardResult",
     "build_leading_features",
     "build_training_set",
-    "RSI_FEATURE_VERSION",
-    "RSI_PERIODS",
+    "RELATIVE_STRENGTH_FEATURE_VERSION",
+    "RELATIVE_STRENGTH_PERIODS",
     "RECURSIVE_SELF_IMPROVEMENT_VERSION",
     "MarketFutureEvaluation",
     "MarketFrozenTrial",
@@ -41,8 +62,9 @@ __all__ = [
     "MarketRsiCandidate",
     "SequentialEvidence",
     "candidate_manifest_digest",
-    "build_rsi_features",
-    "calculate_rsi",
+    "canonicalize_parameter_keys",
+    "build_relative_strength_features",
+    "calculate_relative_strength_index",
     "freeze_candidate",
     "freeze_trial",
     "freeze_promotion_report",
@@ -50,6 +72,19 @@ __all__ = [
     "sequential_loss_improvement_test",
     "trial_manifest_digest",
     "validate_successor",
+    "ERROR_CATEGORIES",
+    "EXTRACTION_MISS",
+    "FINAL_EXCLUSION",
+    "MARKET_NOISE",
+    "MISSING_INPUT",
+    "MIN_RATIONALE_SESSIONS",
+    "OVERESTIMATION",
+    "CandidateRationale",
+    "classify_extreme_selection",
+    "classify_target_settlement",
+    "freeze_candidate_rationale",
+    "rationale_manifest_digest",
+    "summarize_error_classification",
     "walk_forward_validate",
     "DailyMarketCollector",
     "MarketDataset",

@@ -25,6 +25,7 @@ from .recursive_self_improvement import (
     MarketRecursiveImprovementGate,
     MarketRsiCandidate,
     candidate_manifest_digest,
+    canonicalize_parameter_keys,
     parameter_manifest_digest,
     sequential_loss_improvement_test,
     trial_manifest_digest,
@@ -119,16 +120,16 @@ def _source_commit(value: str | None) -> str:
 
 
 MUTATION_SCHEDULE: tuple[tuple[str, tuple[object, ...]], ...] = (
-    ("rsi_feature_weight", (1.0, 0.75, 1.25, 1.50, 0.50, 2.00)),
+    ("relative_strength_feature_weight", (1.0, 0.75, 1.25, 1.50, 0.50, 2.00)),
     ("feature_lags", (5, 3, 7, 10, 2)),
     ("neutral_band", (0.001, 0.0005, 0.0015, 0.0020, 0.0)),
     ("no_trade_threshold", (0.45, 0.40, 0.50, 0.55, 0.35)),
     (
-        "rsi_periods",
+        "relative_strength_periods",
         ([5, 7, 14, 21], [5, 14, 21], [7, 14, 28], [3, 7, 14, 21], [5, 10, 20, 40]),
     ),
     (
-        "rsi_feature_set",
+        "relative_strength_feature_set",
         (
             ["level", "velocity3", "cross50", "extreme_state"],
             ["level", "velocity3", "cross50"],
@@ -141,16 +142,20 @@ MUTATION_SCHEDULE: tuple[tuple[str, tuple[object, ...]], ...] = (
 
 
 def _next_parameters(active: Mapping[str, object], attempt: int) -> dict[str, object]:
+    # A not-yet-promoted active configuration inherited from a pre-rename
+    # artifact may still carry old rsi_* keys; canonicalize once here so
+    # every newly minted candidate uses only the current parameter names.
+    base = canonicalize_parameter_keys(active)
     search_size = 1
     for _, choices in MUTATION_SCHEDULE:
         search_size *= len(choices)
     for offset in range(search_size):
         cursor = (attempt + offset) % search_size
-        parameters = deepcopy(dict(active))
+        parameters = deepcopy(base)
         for name, choices in MUTATION_SCHEDULE:
             parameters[name] = deepcopy(choices[cursor % len(choices)])
             cursor //= len(choices)
-        if parameters != dict(active):
+        if parameters != base:
             return parameters
     raise RuntimeError("recursive RSI search space contains no alternative configuration")
 

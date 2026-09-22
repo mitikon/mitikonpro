@@ -3,7 +3,7 @@ from __future__ import annotations
 import numpy as np
 import pandas as pd
 
-from .rsi import RSI_PERIODS, build_rsi_features
+from .relative_strength_feature import RELATIVE_STRENGTH_PERIODS, build_relative_strength_features
 
 
 REQUIRED_SYMBOLS = ("SPY", "QQQ", "RSP", "SMH", "HYG", "LQD", "XLY", "XLP")
@@ -20,7 +20,7 @@ def _has_usable_history(series: pd.Series, *, positive_only: bool = False) -> bo
     return len(series) - 1 - int(positions[-1]) <= MAX_SERIES_STALENESS_ROWS
 
 
-RSI_FEATURE_SET = ("level", "velocity3", "cross50", "extreme_state")
+RELATIVE_STRENGTH_FEATURE_SET = ("level", "velocity3", "cross50", "extreme_state")
 
 
 def build_leading_features(
@@ -28,9 +28,9 @@ def build_leading_features(
     volume: pd.DataFrame | None = None,
     *,
     feature_lags: int = 5,
-    rsi_periods: tuple[int, ...] = RSI_PERIODS,
-    rsi_feature_set: tuple[str, ...] = RSI_FEATURE_SET,
-    rsi_feature_weight: float = 1.0,
+    relative_strength_periods: tuple[int, ...] = RELATIVE_STRENGTH_PERIODS,
+    relative_strength_feature_set: tuple[str, ...] = RELATIVE_STRENGTH_FEATURE_SET,
+    relative_strength_feature_weight: float = 1.0,
 ) -> pd.DataFrame:
     """日次終値から1～5日ラグと主要な市場内部乖離を作る。
 
@@ -38,15 +38,15 @@ def build_leading_features(
     """
     if not 1 <= int(feature_lags) <= 10:
         raise ValueError("feature_lags must be in [1, 10]")
-    periods = tuple(int(period) for period in rsi_periods)
+    periods = tuple(int(period) for period in relative_strength_periods)
     if not periods or any(period < 2 or period > 60 for period in periods):
-        raise ValueError("rsi_periods must contain values in [2, 60]")
-    feature_set = tuple(str(value) for value in rsi_feature_set)
-    unknown_rsi_features = set(feature_set) - set(RSI_FEATURE_SET)
-    if not feature_set or unknown_rsi_features:
-        raise ValueError(f"unsupported RSI feature set: {sorted(unknown_rsi_features)}")
-    if not 0.0 <= float(rsi_feature_weight) <= 3.0:
-        raise ValueError("rsi_feature_weight must be in [0, 3]")
+        raise ValueError("relative_strength_periods must contain values in [2, 60]")
+    feature_set = tuple(str(value) for value in relative_strength_feature_set)
+    unknown_features = set(feature_set) - set(RELATIVE_STRENGTH_FEATURE_SET)
+    if not feature_set or unknown_features:
+        raise ValueError(f"unsupported relative strength feature set: {sorted(unknown_features)}")
+    if not 0.0 <= float(relative_strength_feature_weight) <= 3.0:
+        raise ValueError("relative_strength_feature_weight must be in [0, 3]")
     if not close.index.is_monotonic_increasing:
         raise ValueError("close index must be sorted in ascending time order")
     missing = set(REQUIRED_SYMBOLS) - set(close.columns)
@@ -89,20 +89,21 @@ def build_leading_features(
     features["spread_hyg_lqd"] = returns["HYG"] - returns["LQD"]
     features["spread_xly_xlp"] = returns["XLY"] - returns["XLP"]
 
-    # RSI is an observed feature family, never a fixed 70/30 trading rule.
-    # The daily fit/settlement loop relearns its usefulness from next-session outcomes.
-    rsi_features = build_rsi_features(
+    # Relative Strength Index is an observed feature family, never a fixed 70/30
+    # trading rule. The daily fit/settlement loop relearns its usefulness from
+    # next-session outcomes. This is unrelated to RSI (Recursive Self-Improvement).
+    relative_strength_features = build_relative_strength_features(
         numeric_close, tuple(numeric_close.columns), periods=periods
     )
-    selected_rsi_columns = [
+    selected_columns = [
         column
-        for column in rsi_features.columns
+        for column in relative_strength_features.columns
         if any(column.endswith(f"_{feature}") for feature in feature_set)
     ]
     features.update(
         {
-            column: rsi_features[column] * float(rsi_feature_weight)
-            for column in selected_rsi_columns
+            column: relative_strength_features[column] * float(relative_strength_feature_weight)
+            for column in selected_columns
         }
     )
 

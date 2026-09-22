@@ -24,14 +24,40 @@ FIXED_VARIANCE_TARGET = 0.90
 FIXED_MIN_SAMPLES = 60
 ALLOWED_CANDIDATE_PARAMETERS = frozenset(
     {
-        "rsi_periods",
-        "rsi_feature_set",
-        "rsi_feature_weight",
+        "relative_strength_periods",
+        "relative_strength_feature_set",
+        "relative_strength_feature_weight",
         "feature_lags",
         "neutral_band",
         "no_trade_threshold",
+        # Pre-rename spellings ("RSI" here always meant Recursive
+        # Self-Improvement, never the technical indicator, but earlier
+        # candidate parameters were still named after it). Already-sealed
+        # historical candidates are hash-locked and must load and verify
+        # exactly as originally written, so their parameter keys are never
+        # rewritten in place. New candidates always use the names above;
+        # see recursive_runtime._next_parameters, which canonicalizes an
+        # old-style active configuration before minting the next candidate.
+        "rsi_periods",
+        "rsi_feature_set",
+        "rsi_feature_weight",
     }
 )
+LEGACY_PARAMETER_ALIASES: Mapping[str, str] = {
+    "rsi_periods": "relative_strength_periods",
+    "rsi_feature_set": "relative_strength_feature_set",
+    "rsi_feature_weight": "relative_strength_feature_weight",
+}
+
+
+def canonicalize_parameter_keys(parameters: Mapping[str, object]) -> dict[str, object]:
+    """Map any pre-rename ``rsi_*`` parameter keys to ``relative_strength_*``.
+
+    Used only when *deriving* a value from a parameters mapping (building
+    model inputs, minting a new candidate's search base) - never to rewrite
+    an already-sealed, hash-locked candidate or state payload in place.
+    """
+    return {LEGACY_PARAMETER_ALIASES.get(key, key): value for key, value in parameters.items()}
 
 
 def _utc(value: datetime, name: str) -> datetime:

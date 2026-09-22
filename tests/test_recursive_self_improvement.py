@@ -31,7 +31,7 @@ def candidate(**changes):
         "generation": 1,
         "created_at": CREATED,
         "source_commit": COMMIT,
-        "parameters": {"rsi_feature_weight": 0.20},
+        "parameters": {"relative_strength_feature_weight": 0.20},
     }
     values.update(changes)
     values.setdefault("parameter_manifest_sha256", parameter_manifest_digest(values["parameters"]))
@@ -146,7 +146,7 @@ def test_evaluation_cannot_be_rebound_after_outcome():
 
 def test_next_generation_must_chain_to_promoted_report():
     report = MarketRecursiveImprovementGate().evaluate(candidate(), observations(), trial_rows())
-    params = {"rsi_feature_weight": 0.25}
+    params = {"relative_strength_feature_weight": 0.25}
     child = candidate(
         candidate_id="market-rsi-g2",
         parent_version=report.candidate_id,

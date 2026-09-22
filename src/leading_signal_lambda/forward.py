@@ -18,10 +18,12 @@ import pandas as pd
 from maintenance_rsi import ExternalDataGuard
 
 from .collector import DailyMarketCollector, MarketDataset
+from .error_classification import summarize_error_classification
 from .market_calendar import NYSETradingCalendar
 from .model import LeadingLambdaClassifier
 from .signals import REQUIRED_SYMBOLS, build_leading_features, build_training_set
-from .rsi import RSI_FEATURE_VERSION, RSI_PERIODS
+from .relative_strength_feature import RELATIVE_STRENGTH_FEATURE_VERSION, RELATIVE_STRENGTH_PERIODS
+from .recursive_self_improvement import canonicalize_parameter_keys
 from .recursive_runtime import (
     PARALLEL_CANDIDATES,
     bootstrap_state,
@@ -66,9 +68,9 @@ FORWARD_REQUIRED_CLOSE = tuple(
 )
 
 DEFAULT_MODEL_PARAMETERS: dict[str, object] = {
-    "rsi_periods": [5, 7, 14, 21],
-    "rsi_feature_set": ["level", "velocity3", "cross50", "extreme_state"],
-    "rsi_feature_weight": 1.0,
+    "relative_strength_periods": [5, 7, 14, 21],
+    "relative_strength_feature_set": ["level", "velocity3", "cross50", "extreme_state"],
+    "relative_strength_feature_weight": 1.0,
     "feature_lags": 5,
     "neutral_band": 0.001,
     "no_trade_threshold": 0.45,
@@ -78,10 +80,14 @@ DEFAULT_MODEL_PARAMETERS: dict[str, object] = {
 def normalize_model_parameters(
     parameters: dict[str, object] | None = None,
 ) -> dict[str, object]:
-    values = {**DEFAULT_MODEL_PARAMETERS, **(parameters or {})}
-    values["rsi_periods"] = [int(value) for value in values["rsi_periods"]]
-    values["rsi_feature_set"] = [str(value) for value in values["rsi_feature_set"]]
-    values["rsi_feature_weight"] = float(values["rsi_feature_weight"])
+    # A parameters mapping loaded from a pre-rename artifact may still use the
+    # old rsi_* keys; canonicalize before merging so a learned value is never
+    # silently dropped in favor of the default.
+    supplied = canonicalize_parameter_keys(parameters or {})
+    values = {**DEFAULT_MODEL_PARAMETERS, **supplied}
+    values["relative_strength_periods"] = [int(value) for value in values["relative_strength_periods"]]
+    values["relative_strength_feature_set"] = [str(value) for value in values["relative_strength_feature_set"]]
+    values["relative_strength_feature_weight"] = float(values["relative_strength_feature_weight"])
     values["feature_lags"] = int(values["feature_lags"])
     values["neutral_band"] = float(values["neutral_band"])
     values["no_trade_threshold"] = float(values["no_trade_threshold"])
@@ -126,8 +132,8 @@ class FrozenMarketSignal:
     lambda_reg: float
     variance_target: float
     neutral_band: float
-    rsi_feature_version: str
-    rsi_periods: tuple[int, ...]
+    relative_strength_feature_version: str
+    relative_strength_periods: tuple[int, ...]
     input_sha256: str
     model_generation: int
     model_config_sha256: str
@@ -187,9 +193,9 @@ def generate_forward_signals(
         close,
         volume,
         feature_lags=int(parameters["feature_lags"]),
-        rsi_periods=tuple(parameters["rsi_periods"]),
-        rsi_feature_set=tuple(parameters["rsi_feature_set"]),
-        rsi_feature_weight=float(parameters["rsi_feature_weight"]),
+        relative_strength_periods=tuple(parameters["relative_strength_periods"]),
+        relative_strength_feature_set=tuple(parameters["relative_strength_feature_set"]),
+        relative_strength_feature_weight=float(parameters["relative_strength_feature_weight"]),
     )
     latest = features.loc[signal_session].replace([np.inf, -np.inf], np.nan)
     past_features = features.loc[features.index < signal_session]
@@ -228,7 +234,7 @@ def generate_forward_signals(
             variance_target=0.90,
             no_trade_threshold=float(parameters["no_trade_threshold"]),
             min_samples=60,
-            feature_family_weights={"rsi": float(parameters["rsi_feature_weight"])},
+            feature_family_weights={"rs": float(parameters["relative_strength_feature_weight"])},
         ).fit(X, y)
         prediction = model.predict_one(latest)
         class_mean_returns = next_returns.groupby(y).mean().to_dict()
@@ -263,8 +269,8 @@ def generate_forward_signals(
                 lambda_reg=0.10,
                 variance_target=0.90,
                 neutral_band=neutral_band,
-                rsi_feature_version=RSI_FEATURE_VERSION,
-                rsi_periods=tuple(parameters["rsi_periods"]),
+                relative_strength_feature_version=RELATIVE_STRENGTH_FEATURE_VERSION,
+                relative_strength_periods=tuple(parameters["relative_strength_periods"]),
                 input_sha256=digest,
                 model_generation=int(model_generation),
                 model_config_sha256=config_digest,
@@ -361,9 +367,7 @@ def carry_forward_same_session(
     document = json.loads(source.read_text(encoding="utf-8"))
     signals = document.get("signals", [])
     current_session = _signal_session(dataset).date().isoformat()
-    compatible_versions = {
-        "market-forward-v4", "market-forward-v5", "market-forward-v6", SCHEMA_VERSION
-    }
+    compatible_versions = {"market-forward-v4", "market-forward-v5", "market-forward-v6", SCHEMA_VERSION}
     if (
         document.get("schema_version") not in compatible_versions
         or not signals
@@ -515,7 +519,7 @@ REPORT_COLUMNS = (
     "action", "predicted_class", "predicted_return", "confidence", "edge",
     "actual_return", "actual_class", "direction_correct",
     "return_error", "absolute_divergence_pp", "strategy_return_before_cost",
-    "input_sha256",
+    "input_sha256", "neutral_band", "imputed_feature_count",
 )
 
 
@@ -717,6 +721,12 @@ def write_signal_result_report(
     risers = rows.sort_values("actual_return", ascending=False)
     fallers = rows.sort_values("actual_return", ascending=True)
     misses = rows.sort_values("absolute_divergence_pp", ascending=False, na_position="last")
+    daily_error_classification = summarize_error_classification(
+        rows.to_dict("records"), [daily_extremes]
+    )
+    cumulative_error_classification = summarize_error_classification(
+        history.to_dict("records"), historical_extremes
+    )
     report = {
         "schema_version": "signal-result-report-v2",
         "definition": {
@@ -725,6 +735,11 @@ def write_signal_result_report(
             "no_lookahead": "予測値は凍結済みforward_signalから取得し、結果で再計算しない",
             "extreme_target_hit": "予測上昇1位・下落1位のETF銘柄が実績1位と一致",
             "extreme_direction_correct": "上昇候補は実績騰落率が正、下落候補は実績騰落率が負",
+            "error_classification": (
+                "外れの分類: extraction_miss(抽出漏れ)/overestimation(過大評価)/"
+                "final_exclusion(最終除外)/missing_input(入力欠損)/market_noise(市場ノイズ)。"
+                "分類は候補提案の根拠記録のみに用い、個々の外れを直ちに恒久ルールへは反映しない"
+            ),
         },
         "daily": {
             "signal_session": str(rows["signal_session"].iloc[0]),
@@ -737,6 +752,7 @@ def write_signal_result_report(
             "median_absolute_divergence_pp": float(divergence.median()) if len(divergence) else None,
             "primary_trade": primary_trade,
             "extreme_forecasts": daily_extremes,
+            "error_classification": daily_error_classification,
             "results": records(rows, len(rows)),
             "largest_risers": records(risers),
             "largest_fallers": records(fallers),
@@ -772,6 +788,7 @@ def write_signal_result_report(
             "downside_direction_accuracy": float(
                 np.mean([value["downside"]["direction_correct"] for value in historical_extremes])
             ),
+            "error_classification": cumulative_error_classification,
         },
     }
     report_destination = Path(report_path)
