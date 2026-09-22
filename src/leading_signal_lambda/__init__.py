@@ -60,6 +60,14 @@ from .edge_diagnostics import (
     per_class_report,
     persistence_baseline,
 )
+from .benchmark_report import buy_and_hold_annualized_return
+from .signal_discovery import (
+    TRADABLE_TARGETS,
+    benjamini_hochberg,
+    evaluate_signal,
+    scan_pairwise_signals,
+    signal_strategy_returns,
+)
 from .collector import DailyMarketCollector, MarketDataset, DEFAULT_UNIVERSE
 from .paper_backtest import PaperBacktestResult, run_paper_backtest
 from .paper_pca_sub import PaperPcaSubModel, PaperSignal
@@ -118,6 +126,12 @@ __all__ = [
     "paired_edge_test",
     "per_class_report",
     "persistence_baseline",
+    "buy_and_hold_annualized_return",
+    "TRADABLE_TARGETS",
+    "benjamini_hochberg",
+    "evaluate_signal",
+    "scan_pairwise_signals",
+    "signal_strategy_returns",
     "DailyMarketCollector",
     "MarketDataset",
     "DEFAULT_UNIVERSE",

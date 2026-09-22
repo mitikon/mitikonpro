@@ -21,6 +21,8 @@ leading-lambda-forward = "leading_signal_lambda.forward:main"
 leading-lambda-independent = "leading_signal_lambda.independent_loop:main"
 leading-lambda-calibration-diagnostics = "leading_signal_lambda.calibration_diagnostics:main"
 leading-lambda-edge-diagnostics = "leading_signal_lambda.edge_diagnostics:main"
+leading-lambda-benchmark = "leading_signal_lambda.benchmark_report:main"
+leading-lambda-signal-discovery = "leading_signal_lambda.signal_discovery:main"
 maintenance-rsi-audit = "maintenance_rsi.audit:main"
 
 [tool.pytest.ini_options]
