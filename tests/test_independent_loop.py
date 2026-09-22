@@ -5,7 +5,7 @@ import pandas as pd
 
 from leading_signal_lambda.collector import MarketDataset
 from leading_signal_lambda.independent_loop import (
-    freeze_shadow_forecasts, initial_state, learn, report_for_date,
+    calendar_run_decision, freeze_shadow_forecasts, initial_state, learn, report_for_date,
     settle_shadow_forecasts,
 )
 from leading_signal_lambda.signals import REQUIRED_SYMBOLS
@@ -14,6 +14,10 @@ from leading_signal_lambda.signals import REQUIRED_SYMBOLS
 class Calendar:
     def next_session(self, value):
         return value + pd.Timedelta(days=1)
+
+    def last_completed_session(self, now_utc=None):
+        from leading_signal_lambda.market_calendar import CompletedSession
+        return CompletedSession(pd.Timestamp("2026-09-22").date(), pd.Timestamp("2026-09-22T20:00:00Z"), pd.Timestamp("2026-09-23").date())
 
 
 def dataset(rows=760):
@@ -56,3 +60,14 @@ def test_learning_requires_20_future_sessions_and_never_attaches_to_pca(tmp_path
     next_state, report = learn(state, paths)
     assert report["promotion_status"] == "NO_PROMOTION"
     assert next_state["production_pca_attached"] is False
+
+
+def test_calendar_gate_runs_once_per_completed_market_session(tmp_path):
+    first = calendar_run_decision(Calendar())
+    assert first["should_run"] is True
+    assert first["calendar"] == "XNYS"
+    previous = tmp_path / "forecast.json"
+    previous.write_text(json.dumps({"signal_session": "2026-09-22"}))
+    duplicate = calendar_run_decision(Calendar(), previous)
+    assert duplicate["should_run"] is False
+    assert duplicate["reason"] == "ALREADY_PROCESSED_OR_MARKET_CLOSED"
