@@ -44,6 +44,13 @@ def walk_forward_validate(
                     "action": prediction.action,
                     "confidence": prediction.confidence,
                     "edge": prediction.edge,
+                    # Kept at the fit temperature (default 1.0) so
+                    # calibration_diagnostics can re-derive calibration at any
+                    # other temperature without refitting; see
+                    # calibration_diagnostics.rescale_probabilities.
+                    "prob_neg1": prediction.probabilities.get(-1, 0.0),
+                    "prob_0": prediction.probabilities.get(0, 0.0),
+                    "prob_1": prediction.probabilities.get(1, 0.0),
                 }
             )
     frame = pd.DataFrame(records).set_index("date")

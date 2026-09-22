@@ -212,6 +212,13 @@ def test_pre_rename_rsi_parameter_keys_still_load_and_resolve(tmp_path):
     next_parameters = _next_parameters(loaded["active_model"]["parameters"], attempt=1)
     assert "rsi_feature_weight" not in next_parameters
     assert "relative_strength_feature_weight" in next_parameters
+    # This production state predates confidence_temperature entirely (no key
+    # at all, not even an old spelling). normalize_model_parameters must fill
+    # it in from the default rather than raise a KeyError, and a freshly
+    # minted candidate must always carry an explicit value for it.
+    assert "confidence_temperature" not in old_style_parameters
+    assert resolved["confidence_temperature"] == DEFAULT_MODEL_PARAMETERS["confidence_temperature"]
+    assert "confidence_temperature" in next_parameters
 
 
 def test_legacy_v1_state_migrates_and_tops_up_to_parallel_slots(tmp_path):

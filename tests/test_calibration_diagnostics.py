@@ -1,12 +1,16 @@
 import numpy as np
 import pandas as pd
+import pytest
 
 from leading_signal_lambda import (
     build_leading_features,
     build_training_set,
     calibration_bins,
+    calibration_by_temperature,
     class_balance,
     diagnose_target,
+    rescale_probabilities,
+    walk_forward_metrics_by_neutral_band,
     walk_forward_validate,
 )
 
@@ -53,3 +57,53 @@ def test_diagnose_target_reports_balance_and_calibration_without_changing_predic
     assert "0.001" in report["class_balance_by_neutral_band"]
     assert report["calibration"]
     assert 0.0 <= report["overall_trade_coverage"] <= 1.0
+    assert "1.0" in report["calibration_by_temperature"]
+    assert "0.005" in report["walk_forward_metrics_by_neutral_band"]
+    for metrics in report["walk_forward_metrics_by_neutral_band"].values():
+        assert "direction_accuracy" in metrics
+        assert "annualized_return" in metrics
+        assert "trade_coverage" in metrics
+
+
+def test_walk_forward_metrics_by_neutral_band_refits_per_band():
+    close, volume = sample_market()
+    features = build_leading_features(close, volume)
+    metrics = walk_forward_metrics_by_neutral_band(
+        features, close["SPY"], train_size=252, neutral_band_candidates=(0.001, 0.01)
+    )
+    assert set(metrics) == {"0.001", "0.01"}
+    for entry in metrics.values():
+        assert 0.0 <= entry["direction_accuracy"] <= 1.0
+        assert 0.0 <= entry["trade_coverage"] <= 1.0
+
+
+def test_rescale_probabilities_at_temperature_one_matches_the_stored_confidence():
+    row = pd.Series({"prob_neg1": 0.05, "prob_0": 0.15, "prob_1": 0.80})
+    predicted_class, confidence = rescale_probabilities(row, 1.0)
+    assert predicted_class == 1
+    assert confidence == pytest.approx(0.80, abs=1e-9)
+
+
+def test_rescale_probabilities_never_changes_the_argmax():
+    row = pd.Series({"prob_neg1": 0.02, "prob_0": 0.03, "prob_1": 0.95})
+    for temperature in (1.0, 2.0, 5.0, 10.0):
+        predicted_class, confidence = rescale_probabilities(row, temperature)
+        assert predicted_class == 1
+    # A higher temperature must pull an overconfident probability down, never up.
+    _, low_t_confidence = rescale_probabilities(row, 1.0)
+    _, high_t_confidence = rescale_probabilities(row, 5.0)
+    assert high_t_confidence < low_t_confidence
+
+
+def test_calibration_by_temperature_reports_a_gap_per_candidate():
+    close, volume = sample_market()
+    features = build_leading_features(close, volume)
+    X, y, returns = build_training_set(features, close["SPY"])
+    result = walk_forward_validate(X, y, returns, train_size=252, test_size=21, min_samples=60)
+    sweep = calibration_by_temperature(result.predictions, temperature_candidates=(1.0, 3.0))
+    assert set(sweep) == {"1.0", "3.0"}
+    for entry in sweep.values():
+        assert "overall_calibration_gap" in entry
+        assert entry["bins"]
+    # A higher temperature must never raise mean stated confidence.
+    assert sweep["3.0"]["mean_stated_confidence"] <= sweep["1.0"]["mean_stated_confidence"]

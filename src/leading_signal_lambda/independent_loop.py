@@ -29,7 +29,9 @@ from .market_calendar import NYSETradingCalendar
 
 
 SCHEMA_VERSION = "independent-market-rsi-v1"
-DEFAULT_NEUTRAL_BANDS = (0.0005, 0.001, 0.0015, 0.002)
+# Centered on forward.DEFAULT_MODEL_PARAMETERS["neutral_band"] (0.005 as of
+# 2026-09-22; see that constant's comment for the class-balance evidence).
+DEFAULT_NEUTRAL_BANDS = (0.003, 0.005, 0.0075, 0.01)
 MIN_PROMOTION_SESSIONS = 20
 
 
@@ -53,7 +55,7 @@ def initial_state() -> dict[str, object]:
     return {
         "schema_version": SCHEMA_VERSION,
         "generation": 1,
-        "active_neutral_band": 0.001,
+        "active_neutral_band": 0.005,
         "candidate_neutral_bands": list(DEFAULT_NEUTRAL_BANDS),
         "minimum_future_sessions": MIN_PROMOTION_SESSIONS,
         "production_pca_attached": False,

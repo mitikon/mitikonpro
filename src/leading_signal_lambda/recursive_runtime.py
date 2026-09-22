@@ -122,8 +122,17 @@ def _source_commit(value: str | None) -> str:
 MUTATION_SCHEDULE: tuple[tuple[str, tuple[object, ...]], ...] = (
     ("relative_strength_feature_weight", (1.0, 0.75, 1.25, 1.50, 0.50, 2.00)),
     ("feature_lags", (5, 3, 7, 10, 2)),
-    ("neutral_band", (0.001, 0.0005, 0.0015, 0.0020, 0.0)),
+    # Centered on the 2026-09-22 production default (0.005; see
+    # forward.DEFAULT_MODEL_PARAMETERS for the class-balance evidence).
+    ("neutral_band", (0.005, 0.003, 0.0075, 0.01, 0.002)),
     ("no_trade_threshold", (0.45, 0.40, 0.50, 0.55, 0.35)),
+    # Softens the distance-to-probability softmax; centered on the
+    # 2026-09-22 production default (30.0, chosen by calibration_by_temperature
+    # to bring the SPY/QQQ calibration gap under ~0.07; see
+    # forward.DEFAULT_MODEL_PARAMETERS for the measured values per candidate
+    # temperature). 1.0 (untouched) is kept in the search space as a live
+    # comparison point.
+    ("confidence_temperature", (30.0, 20.0, 25.0, 40.0, 1.0)),
     (
         "relative_strength_periods",
         ([5, 7, 14, 21], [5, 14, 21], [7, 14, 28], [3, 7, 14, 21], [5, 10, 20, 40]),
