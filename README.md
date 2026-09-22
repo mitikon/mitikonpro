@@ -23,7 +23,9 @@
 1. `neutral_band=0.001`では様子見（クラス0）がSPYで約10.7%、QQQで約8.4%しか出現せず、事実上ほぼ毎日「上か下か」の二択を強制していた。`neutral_band=0.005`ではクラス0の比率が約46%まで上がり、三分類として大幅に健全化する。
 2. 確信度90-100%と申告した予測（全体の約75%）の実測正解率はSPY約45.5%、QQQ約49.0%（較正ギャップ約0.5）で、モデルが著しく過信していた。
 
-これを受けて、`DEFAULT_MODEL_PARAMETERS`の`neutral_band`を`0.001`から`0.005`へ変更し、`LeadingLambdaClassifier`に`confidence_temperature`（距離→確率へのsoftmaxを緩める温度、既定1.0＝無変換）を追加しました。`confidence_temperature`は`calibration_diagnostics.calibration_by_temperature`で実データによる較正ギャップの推移を測定したうえで値を決めます（`lambda_reg`・`variance_target`・`min_samples`と異なり、この2つは自律改善ループの対象パラメータであり、固定中核ではありません）。
+これを受けて、`DEFAULT_MODEL_PARAMETERS`の`neutral_band`を`0.001`から`0.005`へ変更し、`LeadingLambdaClassifier`に`confidence_temperature`（距離→確率へのsoftmaxを緩める温度、既定は無変換の1.0）を追加しました。`calibration_by_temperature`による実データ較正ギャップの測定で、`confidence_temperature=30.0`にすると較正ギャップがSPY約0.53→約0.04、QQQ約0.57→約0.07まで縮むことを確認し、これを本番既定値としました。温度は予測クラス（方向判定そのもの）を一切変えず、申告する確信度だけを実測正解率に近づけます。
+
+**重要な留保**: `walk_forward_metrics_by_neutral_band`で`neutral_band`候補ごとに実際に再学習した結果、年率・最大DD・勝率は候補間でノイズが大きく非単調でした（例: SPYは0.001→-10.9%、0.003→-15.7%、0.005→-13.2%、0.0075→-2.4%、0.01→+1.0%。ただし0.01は取引率5.6%と取引回数が少なすぎて信頼できません）。この中から「一番良く見える」帯を事後選択することは、このリポジトリの`MarketRecursiveImprovementGate`が未来セッションでしか候補を昇格させない設計そのものが防ごうとしている事後データスヌーピングに当たるため、あえて行っていません。`neutral_band=0.005`はクラス比率のみを根拠とした暫定値であり、さらなる調整は既存のRSI候補・ゲート機構（未来セッションのみで判定）に委ねます。`confidence_temperature`は予測クラスを変えないため同じ意味でのデータスヌーピングには当たりませんが、こちらも今後の候補探索対象です。
 
 ## 最初の実装範囲
 

@@ -217,7 +217,7 @@ def test_pre_rename_rsi_parameter_keys_still_load_and_resolve(tmp_path):
     # it in from the default rather than raise a KeyError, and a freshly
     # minted candidate must always carry an explicit value for it.
     assert "confidence_temperature" not in old_style_parameters
-    assert resolved["confidence_temperature"] == 1.0
+    assert resolved["confidence_temperature"] == DEFAULT_MODEL_PARAMETERS["confidence_temperature"]
     assert "confidence_temperature" in next_parameters
 
 

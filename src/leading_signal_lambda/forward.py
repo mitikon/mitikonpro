@@ -75,17 +75,31 @@ DEFAULT_MODEL_PARAMETERS: dict[str, object] = {
     # 2026-09-22 calibration_diagnostics on real SPY/QQQ walk-forward data showed
     # 0.001 leaves the no-trade class at ~9-11% of sessions, forcing a near-binary
     # up/down call almost every day. 0.005 raises it to ~46%, a materially
-    # healthier three-way split; see docs/PAPER_PCA_SUB_SPEC.md history and the
-    # calibration-diagnostics workflow artifacts for the measured trade-off.
+    # healthier three-way split. This value is chosen on that class-balance
+    # basis alone, deliberately NOT by picking whichever neutral_band scored
+    # best on walk_forward_metrics_by_neutral_band: that same diagnostic run
+    # showed direction_accuracy/annualized_return across 0.001-0.01 is noisy
+    # and non-monotonic (e.g. SPY: 0.001->-10.9%, 0.003->-15.7%, 0.005->-13.2%,
+    # 0.0075->-2.4%, 0.01->+1.0% but at only 5.6% trade_coverage - too few
+    # trades to trust), and hand-picking the best-looking band from a backtest
+    # already run on this same historical data is exactly the data-snooping
+    # the MarketRecursiveImprovementGate's future-only evaluation exists to
+    # prevent. Any further refinement of this value belongs to that gate
+    # (see recursive_runtime.MUTATION_SCHEDULE), not to this constant.
     "neutral_band": 0.005,
     "no_trade_threshold": 0.45,
     # Softens the distance-to-probability softmax in LeadingLambdaClassifier.
-    # 1.0 = unchanged. The same 2026-09-22 diagnostic found the 90-100% stated
-    # confidence bin (~75% of all predictions) realizing only ~45-49% accuracy
-    # (calibration gap ~0.5). Kept at 1.0 until an empirical grid search (via
-    # the calibration-diagnostics workflow, which alone has real market data
-    # access) selects a value that measurably closes that gap.
-    "confidence_temperature": 1.0,
+    # 1.0 = unchanged. calibration_by_temperature's 2026-09-22 grid search on
+    # real SPY/QQQ walk-forward data (at neutral_band=0.005) measured the
+    # overall calibration gap (mean stated confidence - realized accuracy)
+    # at each candidate: T=1 -> 0.53/0.57, T=5 -> 0.30/0.35, T=20 -> 0.08/0.11,
+    # T=30 -> 0.04/0.07 (SPY/QQQ). 30.0 was chosen as the smallest candidate
+    # that brings both targets' gap under 0.07, without pushing so far past
+    # that point that confidence collapses toward the uninformative 1/3
+    # uniform floor. Temperature scaling is monotonic, so it never changes
+    # which class predict_one() picks or direction_accuracy - only how
+    # honest the reported confidence is (see model.confidence_temperature).
+    "confidence_temperature": 30.0,
 }
 
 
@@ -108,8 +122,8 @@ def normalize_model_parameters(
         raise ValueError("neutral_band must be in [0, 0.02]")
     if not 0.0 <= values["no_trade_threshold"] <= 1.0:
         raise ValueError("no_trade_threshold must be in [0, 1]")
-    if not 0.0 < values["confidence_temperature"] <= 10.0:
-        raise ValueError("confidence_temperature must be in (0, 10]")
+    if not 0.0 < values["confidence_temperature"] <= 100.0:
+        raise ValueError("confidence_temperature must be in (0, 100]")
     return values
 
 

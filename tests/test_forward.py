@@ -94,25 +94,36 @@ def test_recursive_candidate_parameters_reach_the_prediction_model():
 
 def test_confidence_temperature_reaches_the_model_and_is_frozen_on_the_signal():
     dataset = sample_dataset()
+    # The production default (30.0) is already softened relative to the
+    # untouched softmax, so compare against an explicit temperature=1.0
+    # override (sharper) rather than the baseline call.
+    sharp = generate_forward_signals(
+        dataset,
+        FakeCalendar(),
+        model_parameters={"confidence_temperature": 1.0},
+    )
     baseline = generate_forward_signals(dataset, FakeCalendar())
     softened = generate_forward_signals(
         dataset,
         FakeCalendar(),
-        model_parameters={"confidence_temperature": 3.0},
+        model_parameters={"confidence_temperature": 60.0},
         model_generation=1,
     )
-    assert baseline[0].confidence_temperature == 1.0
-    assert softened[0].confidence_temperature == 3.0
+    assert sharp[0].confidence_temperature == 1.0
+    assert baseline[0].confidence_temperature == 30.0
+    assert softened[0].confidence_temperature == 60.0
     assert softened[0].model_config_sha256 != baseline[0].model_config_sha256
-    # A higher temperature must never predict a class with a *lower* stated
-    # confidence than the baseline call would have shown for the same class,
-    # since it only softens overconfidence; it must not raise confidence.
+    # A higher temperature must never predict a class with a *higher* stated
+    # confidence than a lower temperature would have shown for the same
+    # class, since it only softens overconfidence; it must not raise
+    # confidence.
+    assert baseline[0].confidence <= sharp[0].confidence + 1e-9
     assert softened[0].confidence <= baseline[0].confidence + 1e-9
 
 
-def test_default_neutral_band_matches_the_2026_09_22_calibration_evidence():
+def test_default_neutral_band_and_temperature_match_the_2026_09_22_calibration_evidence():
     assert forward_module.DEFAULT_MODEL_PARAMETERS["neutral_band"] == 0.005
-    assert forward_module.DEFAULT_MODEL_PARAMETERS["confidence_temperature"] == 1.0
+    assert forward_module.DEFAULT_MODEL_PARAMETERS["confidence_temperature"] == 30.0
 
 
 def test_primary_trade_selection_does_not_use_results():
