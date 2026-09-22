@@ -108,6 +108,17 @@ def test_state_is_hash_chained_and_tampering_is_rejected(tmp_path):
         load_state(first)
 
 
+def test_write_state_refuses_to_overwrite_via_atomic_create(tmp_path):
+    created = datetime(2026, 9, 15, tzinfo=UTC)
+    state = bootstrap_state(DEFAULT_MODEL_PARAMETERS, COMMIT, created)
+    destination = tmp_path / "state.json"
+    write_state(state, destination)
+    with pytest.raises(FileExistsError, match="refusing to overwrite recursive RSI state"):
+        write_state(state, destination)
+    # The refused second write must not have touched the first write's bytes.
+    assert load_state(destination)["active_model"]["generation"] == 0
+
+
 def _legacy_v1_state(created):
     legacy_state = {
         "schema_version": LEGACY_RUNTIME_SCHEMA_VERSION,
@@ -255,6 +266,40 @@ def test_ambiguous_candidates_keep_accumulating_past_the_early_floor(tmp_path):
     # forcing a decision on a partial, ambiguous window.
     assert evaluate_and_rotate_candidates(state, COMMIT, created + timedelta(days=10)) == []
     assert all(len(slot["evaluations"]) == 6 for slot in state["candidate_slots"])
+
+
+def test_ambiguous_candidates_keep_accumulating_past_min_future_sessions(tmp_path):
+    """A CONTINUE verdict at/after the 20-session window must not collapse to REJECTED.
+
+    Regression test: evaluate_and_rotate_candidates used to call the full
+    promotion gate unconditionally once a slot reached min_future_sessions,
+    even when the Wald SPRT verdict was still CONTINUE (inconclusive). That
+    turned gates["loss_improved"] False and forced status="REJECTED",
+    discarding 20 sessions of genuinely unresolved evidence and reseeding
+    the slot from scratch instead of letting the SPRT keep accumulating,
+    exactly as it is allowed to before the window.
+    """
+    created = datetime(2026, 9, 15, tzinfo=UTC)
+    state = bootstrap_state(DEFAULT_MODEL_PARAMETERS, COMMIT, created)
+    starting_candidate_ids = [slot["candidate"]["candidate_id"] for slot in state["candidate_slots"]]
+
+    # Same noisy, mostly-positive-but-inconsistent pattern used below the
+    # early floor, just cycled long enough to cross min_future_sessions (20)
+    # while remaining strictly between the SPRT's REJECT/PROMOTE boundaries.
+    per_session_losses = [0.010, 0.028, 0.014, 0.024, 0.011, 0.023]
+    for index in range(20):
+        loss = per_session_losses[index % len(per_session_losses)]
+        _register_and_settle_round(
+            state, tmp_path, index, created,
+            baseline_loss=0.020, candidate_losses=[loss, loss, loss],
+        )
+
+    results = evaluate_and_rotate_candidates(state, COMMIT, created + timedelta(days=30))
+    assert results == []
+    for slot in state["candidate_slots"]:
+        assert slot["candidate"]["candidate_id"] in starting_candidate_ids
+        assert len(slot["evaluations"]) == 20
+        assert slot["pending_trial"] is None
 
 
 def test_settle_pending_trials_rejects_settlement_with_no_rows(tmp_path):

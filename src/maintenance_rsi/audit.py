@@ -187,6 +187,17 @@ def _check_core(root: Path) -> list[AuditFinding]:
     return findings
 
 
+def _value_chain_identifiers(node: ast.AST) -> list[str]:
+    """Names touched by a (possibly chained) attribute access, e.g. ``self.pickle`` -> ["pickle", "self"]."""
+    identifiers: list[str] = []
+    while isinstance(node, ast.Attribute):
+        identifiers.append(node.attr)
+        node = node.value
+    if isinstance(node, ast.Name):
+        identifiers.append(node.id)
+    return identifiers
+
+
 def _dangerous_call_findings(tree: ast.AST, path: Path) -> list[AuditFinding]:
     findings: list[AuditFinding] = []
     for node in ast.walk(tree):
@@ -203,10 +214,13 @@ def _dangerous_call_findings(tree: ast.AST, path: Path) -> list[AuditFinding]:
                         str(path),
                     )
                 )
-            if isinstance(func.value, ast.Name):
-                message = _BANNED_QUALIFIED_CALLS.get((func.value.id, func.attr))
+            # Not just a bare `module.attr(...)`: also catch attribute-chained
+            # access to a banned module, e.g. `self.pickle.load(...)`.
+            for module_name in _value_chain_identifiers(func.value):
+                message = _BANNED_QUALIFIED_CALLS.get((module_name, func.attr))
                 if message is not None:
                     findings.append(AuditFinding("DANGEROUS_SOURCE_PATTERN", Severity.HIGH, message, str(path)))
+                    break
         for keyword in node.keywords:
             if (
                 keyword.arg == "shell"

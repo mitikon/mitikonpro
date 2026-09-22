@@ -1,3 +1,4 @@
+import ast
 import json
 from pathlib import Path
 
@@ -5,6 +6,7 @@ import pandas as pd
 import pytest
 
 from maintenance_rsi import ExternalDataGuard, MalwareScan, MalwareStatus, audit_repository, validate_market_frames
+from maintenance_rsi.audit import _dangerous_call_findings
 
 
 def test_current_repository_passes_maintenance_integrity_controls():
@@ -84,6 +86,34 @@ def test_quarantine_uses_content_hash_and_removes_untrusted_source(tmp_path):
     assert destination.exists()
     assert destination.name.endswith(".json.quarantine")
     assert not source.exists()
+
+
+def test_dangerous_call_detector_catches_attribute_chained_access_to_banned_modules():
+    """Regression test: the AST scanner used to only match a bare
+    `module.attr(...)` call. Wrapping the banned module behind another
+    attribute, e.g. `self.pickle.load(...)`, made `func.value` an
+    `ast.Attribute` instead of `ast.Name`, so the qualified-call lookup was
+    skipped entirely and the evasion went undetected.
+    """
+    source = (
+        "import pickle\n"
+        "class C:\n"
+        "    pickle = pickle\n"
+        "    def load_it(self, handle):\n"
+        "        return self.pickle.load(handle)\n"
+    )
+    tree = ast.parse(source, filename="evasive.py")
+    findings = _dangerous_call_findings(tree, Path("evasive.py"))
+    assert any(
+        finding.code == "DANGEROUS_SOURCE_PATTERN" and "pickle" in finding.message
+        for finding in findings
+    )
+
+
+def test_dangerous_call_detector_still_catches_the_direct_qualified_call():
+    tree = ast.parse("import pickle\npickle.load(handle)\n", filename="direct.py")
+    findings = _dangerous_call_findings(tree, Path("direct.py"))
+    assert any(finding.code == "DANGEROUS_SOURCE_PATTERN" for finding in findings)
 
 
 def test_market_frame_poisoning_is_blocked():

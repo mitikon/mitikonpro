@@ -2,6 +2,7 @@ import json
 
 import numpy as np
 import pandas as pd
+import pytest
 
 from leading_signal_lambda.collector import MarketDataset
 from leading_signal_lambda.independent_loop import (
@@ -40,6 +41,24 @@ def test_independent_forecast_is_write_once_and_settled_without_mutation(tmp_pat
     assert value["status"] == "SETTLED_WITHOUT_FORECAST_MUTATION"
     assert len(value["results"]) == 4
     assert report_for_date([settled], value["target_session"])["settlement_sha256"]
+
+
+def test_settle_reports_a_clear_error_when_the_primary_target_has_no_finite_price(tmp_path):
+    """Regression test: a missing/NaN price for the primary trade's target used
+    to crash settle_shadow_forecasts with an uncaught StopIteration (the row
+    is filtered out by the finite-price check, so `next(row for row in rows
+    if row["target"] == primary["target"])` had nothing to find). It must now
+    raise a clear, catchable ValueError instead.
+    """
+    frozen = freeze_shadow_forecasts(dataset(759), Calendar(), initial_state(), tmp_path / "forecast.json")
+    frozen_payload = json.loads(frozen.read_text())
+    first_candidate = next(iter(frozen_payload["candidates"].values()))
+    primary_target = first_candidate["primary_trade"]["target"]
+
+    broken = dataset(760)
+    broken.close.loc[broken.close.index[-1], primary_target] = np.nan
+    with pytest.raises(ValueError, match="missing the primary trade target"):
+        settle_shadow_forecasts(frozen, broken, tmp_path / "settled.json")
 
 
 def test_learning_requires_20_future_sessions_and_never_attaches_to_pca(tmp_path):
