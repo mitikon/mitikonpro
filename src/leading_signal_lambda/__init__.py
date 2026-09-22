@@ -60,6 +60,7 @@ from .edge_diagnostics import (
     per_class_report,
     persistence_baseline,
 )
+from .benchmark_report import buy_and_hold_annualized_return
 from .collector import DailyMarketCollector, MarketDataset, DEFAULT_UNIVERSE
 from .paper_backtest import PaperBacktestResult, run_paper_backtest
 from .paper_pca_sub import PaperPcaSubModel, PaperSignal
@@ -118,6 +119,7 @@ __all__ = [
     "paired_edge_test",
     "per_class_report",
     "persistence_baseline",
+    "buy_and_hold_annualized_return",
     "DailyMarketCollector",
     "MarketDataset",
     "DEFAULT_UNIVERSE",
