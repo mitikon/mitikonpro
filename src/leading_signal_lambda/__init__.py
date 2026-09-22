@@ -50,6 +50,16 @@ from .calibration_diagnostics import (
     rescale_probabilities,
     walk_forward_metrics_by_neutral_band,
 )
+from .edge_diagnostics import (
+    block_bootstrap_ci,
+    diagnose_edge_significance,
+    evaluate_edge_significance,
+    majority_class_baseline,
+    one_sample_edge_test,
+    paired_edge_test,
+    per_class_report,
+    persistence_baseline,
+)
 from .collector import DailyMarketCollector, MarketDataset, DEFAULT_UNIVERSE
 from .paper_backtest import PaperBacktestResult, run_paper_backtest
 from .paper_pca_sub import PaperPcaSubModel, PaperSignal
@@ -100,6 +110,14 @@ __all__ = [
     "diagnose_target",
     "rescale_probabilities",
     "walk_forward_metrics_by_neutral_band",
+    "block_bootstrap_ci",
+    "diagnose_edge_significance",
+    "evaluate_edge_significance",
+    "majority_class_baseline",
+    "one_sample_edge_test",
+    "paired_edge_test",
+    "per_class_report",
+    "persistence_baseline",
     "DailyMarketCollector",
     "MarketDataset",
     "DEFAULT_UNIVERSE",
