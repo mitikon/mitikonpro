@@ -329,6 +329,7 @@ def select_extreme_forecasts(
             "confidence": float(signal["confidence"]),
             "edge": float(signal["edge"]),
             "input_sha256": signal["input_sha256"],
+            "neutral_band": float(signal.get("neutral_band", 0.0)),
             "status": "PENDING",
         }
 
@@ -646,6 +647,7 @@ def write_signal_result_report(
                 "absolute_divergence_pp": abs(
                     float(predicted["actual_return"]) - float(predicted["predicted_return"])
                 ) * 100.0,
+                "neutral_band": float(predicted["neutral_band"]),
             }
         return results
 

@@ -100,6 +100,23 @@ def test_negligible_actual_extreme_move_is_market_noise():
     assert classify_extreme_selection(row, market_noise_band=0.001) == MARKET_NOISE
 
 
+def test_market_noise_is_reachable_from_the_settlement_neutral_band_alone():
+    """Regression test: market_noise_band used to default to a hardcoded 0.0,
+    and no production caller (forward.py's summarize_error_classification
+    call) ever passed an override, so MARKET_NOISE was effectively
+    unreachable for extreme-selection misses. It must now fall back to the
+    settlement's own neutral_band field, matching classify_target_settlement.
+    """
+    row = _extreme(actual_extreme_return=0.0005, neutral_band=0.001)
+    assert classify_extreme_selection(row) == MARKET_NOISE
+
+
+def test_extreme_selection_without_a_neutral_band_field_still_defaults_to_zero():
+    row = _extreme(actual_extreme_return=0.0005)
+    assert "neutral_band" not in row
+    assert classify_extreme_selection(row) != MARKET_NOISE
+
+
 def test_summarize_error_classification_counts_targets_and_extremes():
     rows = [_target_row(imputed_feature_count=1), _target_row(direction_correct=True)]
     sessions = [{"upside": _extreme(), "downside": _extreme(exact_target_hit=True)}]
