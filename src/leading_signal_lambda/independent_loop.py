@@ -154,8 +154,18 @@ def settle_shadow_forecasts(frozen_path: str | Path, dataset, output: str | Path
                 "direction_correct": int(signal["predicted_class"]) == actual_class,
                 "absolute_error": abs(float(signal["predicted_return"]) - actual_return),
             })
+        if not rows:
+            raise ValueError(
+                f"settlement has no finite-price rows for {candidate_id} on "
+                f"{signal_day.date()}/{target_day.date()}"
+            )
         primary = candidate["primary_trade"]
-        selected = next(row for row in rows if row["target"] == primary["target"])
+        selected = next((row for row in rows if row["target"] == primary["target"]), None)
+        if selected is None:
+            raise ValueError(
+                f"settlement is missing the primary trade target {primary['target']!r} "
+                f"for {candidate_id} on {signal_day.date()}/{target_day.date()}"
+            )
         position = int(primary["position"])
         actual_up = max(rows, key=lambda row: row["actual_return"])["target"]
         actual_down = min(rows, key=lambda row: row["actual_return"])["target"]

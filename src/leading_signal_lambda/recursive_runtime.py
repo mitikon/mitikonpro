@@ -289,8 +289,6 @@ def write_state(
 ) -> Path:
     destination = Path(path)
     destination.parent.mkdir(parents=True, exist_ok=True)
-    if destination.exists():
-        raise FileExistsError(f"refusing to overwrite recursive RSI state: {destination}")
     payload = deepcopy(dict(state))
     payload.pop("state_sha256", None)
     payload["previous_state_sha256"] = (
@@ -298,10 +296,14 @@ def write_state(
     )
     payload["updated_at"] = datetime.now(timezone.utc).isoformat()
     payload["state_sha256"] = sha256(_canonical(payload)).hexdigest()
-    destination.write_text(
-        json.dumps(payload, ensure_ascii=False, sort_keys=True, indent=2) + "\n",
-        encoding="utf-8",
-    )
+    try:
+        # Exclusive create (not check-then-write) so two concurrent writers
+        # targeting the same path cannot both pass a staleness check and
+        # have the second silently clobber the first's hash-chained state.
+        with destination.open("x", encoding="utf-8") as handle:
+            handle.write(json.dumps(payload, ensure_ascii=False, sort_keys=True, indent=2) + "\n")
+    except FileExistsError as exc:
+        raise FileExistsError(f"refusing to overwrite recursive RSI state: {destination}") from exc
     return destination
 
 
@@ -432,20 +434,28 @@ def evaluate_and_rotate_candidates(
             continue
         evaluations = [_evaluation_from_payload(value) for value in evaluations_payload]
 
+        # A Wald SPRT verdict is valid evidence at any sample size, so a
+        # candidate that is *already* statistically conclusively worse than
+        # baseline can be abandoned now instead of burning the rest of the
+        # min_future_sessions window on a doomed candidate. It also means a
+        # candidate must not be force-decided just because it reached
+        # min_future_sessions: CONTINUE is a real verdict (the boundary
+        # simply has not been crossed yet), so it keeps accumulating
+        # sessions past the window exactly as it does before the window,
+        # instead of collapsing an inconclusive result into REJECTED.
+        evidence = sequential_loss_improvement_test(
+            [row.baseline_loss for row in evaluations],
+            [row.candidate_loss for row in evaluations],
+            alpha=false_promotion_rate,
+            beta=false_rejection_rate,
+        )
+        if evidence.decision == "CONTINUE":
+            continue
+
         if sessions_so_far < min_future_sessions:
-            # A Wald SPRT verdict is valid evidence at any sample size, so a
-            # candidate that is *already* statistically conclusively worse
-            # than baseline can be abandoned now instead of burning the rest
-            # of the min_future_sessions window on a doomed candidate. Never
-            # promotes on a partial window: only an early REJECT
+            # Never promotes on a partial window: only an early REJECT
             # short-circuits here.
-            early_evidence = sequential_loss_improvement_test(
-                [row.baseline_loss for row in evaluations],
-                [row.candidate_loss for row in evaluations],
-                alpha=false_promotion_rate,
-                beta=false_rejection_rate,
-            )
-            if early_evidence.decision != "REJECT":
+            if evidence.decision != "REJECT":
                 continue
             candidate = _candidate_from_payload(slot["candidate"])
             conclusions.append(
@@ -456,8 +466,8 @@ def evaluate_and_rotate_candidates(
                         "candidate_id": candidate.candidate_id,
                         "generation": candidate.generation,
                         "evaluated_sessions": sessions_so_far,
-                        "mean_loss_improvement": early_evidence.mean_improvement,
-                        "log_likelihood_ratio": early_evidence.log_likelihood_ratio,
+                        "mean_loss_improvement": evidence.mean_improvement,
+                        "log_likelihood_ratio": evidence.log_likelihood_ratio,
                     },
                     "candidate": None,
                     "report": None,
