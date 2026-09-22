@@ -108,19 +108,27 @@ def classify_target_settlement(
 def classify_extreme_selection(
     forecast_settlement: Mapping[str, object],
     *,
-    market_noise_band: float = 0.0,
+    market_noise_band: float | None = None,
     overestimation_ratio: float = DEFAULT_OVERESTIMATION_RATIO,
     final_exclusion_rank: int = DEFAULT_FINAL_EXCLUSION_RANK,
 ) -> str | None:
     """Classify a settled upside/downside extreme-ETF selection miss.
 
     Returns ``None`` when the predicted extreme ETF was the actual extreme
-    (``exact_target_hit``).
+    (``exact_target_hit``). ``market_noise_band`` defaults to the
+    settlement's own ``neutral_band``, matching classify_target_settlement,
+    since a real market return is essentially never exactly zero: leaving
+    the band at a hardcoded 0.0 would make MARKET_NOISE unreachable here.
     """
     if _as_bool(forecast_settlement.get("exact_target_hit")):
         return None
+    band = (
+        market_noise_band
+        if market_noise_band is not None
+        else _finite_float(forecast_settlement.get("neutral_band"), 0.0)
+    )
     actual_extreme_return = float(forecast_settlement["actual_extreme_return"])
-    if abs(actual_extreme_return) <= market_noise_band:
+    if abs(actual_extreme_return) <= band:
         return MARKET_NOISE
     if not _as_bool(forecast_settlement.get("direction_signal_present")):
         return EXTRACTION_MISS
