@@ -19,6 +19,7 @@ leading-lambda-collect = "leading_signal_lambda.collector:main"
 leading-lambda-validate = "leading_signal_lambda.experiment:main"
 leading-lambda-forward = "leading_signal_lambda.forward:main"
 leading-lambda-independent = "leading_signal_lambda.independent_loop:main"
+leading-lambda-calibration-diagnostics = "leading_signal_lambda.calibration_diagnostics:main"
 maintenance-rsi-audit = "maintenance_rsi.audit:main"
 
 [tool.pytest.ini_options]

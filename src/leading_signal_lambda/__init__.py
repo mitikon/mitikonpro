@@ -42,6 +42,7 @@ from .error_classification import (
     summarize_error_classification,
 )
 from .validation import WalkForwardResult, walk_forward_validate
+from .calibration_diagnostics import calibration_bins, class_balance, diagnose_target
 from .collector import DailyMarketCollector, MarketDataset, DEFAULT_UNIVERSE
 from .paper_backtest import PaperBacktestResult, run_paper_backtest
 from .paper_pca_sub import PaperPcaSubModel, PaperSignal
@@ -86,6 +87,9 @@ __all__ = [
     "rationale_manifest_digest",
     "summarize_error_classification",
     "walk_forward_validate",
+    "calibration_bins",
+    "class_balance",
+    "diagnose_target",
     "DailyMarketCollector",
     "MarketDataset",
     "DEFAULT_UNIVERSE",
