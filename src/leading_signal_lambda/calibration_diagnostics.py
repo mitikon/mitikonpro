@@ -42,7 +42,13 @@ from .validation import walk_forward_validate
 
 
 DEFAULT_NEUTRAL_BAND_CANDIDATES = (0.001, 0.002, 0.003, 0.005, 0.0075, 0.01, 0.015)
-DEFAULT_TEMPERATURE_CANDIDATES = (1.0, 1.5, 2.0, 2.5, 3.0, 4.0, 5.0)
+# A narrower subset actually refit and walk-forward validated: class_balance
+# above is a free label re-count with no refit, but a genuine walk-forward
+# comparison of trading-relevant metrics (direction_accuracy, drawdown,
+# win rate) needs a full retrain-and-predict loop per band, so this list is
+# kept short to bound workflow run time.
+DEFAULT_NEUTRAL_BAND_METRIC_CANDIDATES = (0.001, 0.003, 0.005, 0.0075, 0.01)
+DEFAULT_TEMPERATURE_CANDIDATES = (1.0, 1.5, 2.0, 2.5, 3.0, 4.0, 5.0, 8.0, 12.0, 20.0, 30.0)
 
 
 def class_balance(next_returns: pd.Series, neutral_band: float) -> dict[str, dict[str, float | int]]:
@@ -137,6 +143,34 @@ def calibration_bins(predictions: pd.DataFrame, n_bins: int = 10) -> list[dict[s
     return rows
 
 
+def walk_forward_metrics_by_neutral_band(
+    features: pd.DataFrame,
+    close_target: pd.Series,
+    *,
+    train_size: int = 504,
+    neutral_band_candidates: tuple[float, ...] = DEFAULT_NEUTRAL_BAND_METRIC_CANDIDATES,
+) -> dict[str, dict[str, float]]:
+    """Refit and walk-forward each candidate band, not just recount labels.
+
+    class_balance() alone cannot say whether a wider band actually helps: it
+    only recounts labels without refitting. A wider band also changes the
+    training class priors the model fits on, which can move
+    direction_accuracy in either direction. This runs the real
+    production config (lambda_reg=0.10, variance_target=0.90, min_samples=60,
+    confidence_temperature=1.0) once per candidate band and reports the same
+    metrics walk_forward_validate always has (direction_accuracy,
+    annualized_return, max_drawdown, trade_win_rate, trade_coverage).
+    """
+    metrics_by_band: dict[str, dict[str, float]] = {}
+    for band in neutral_band_candidates:
+        X, y, returns = build_training_set(features, close_target, neutral_band=band)
+        result = walk_forward_validate(
+            X, y, returns, train_size=train_size, test_size=21, lambda_reg=0.10, variance_target=0.90, min_samples=60
+        )
+        metrics_by_band[str(band)] = dict(result.metrics)
+    return metrics_by_band
+
+
 def diagnose_target(
     close: pd.DataFrame,
     volume: pd.DataFrame,
@@ -144,6 +178,7 @@ def diagnose_target(
     *,
     train_size: int = 504,
     neutral_band_candidates: tuple[float, ...] = DEFAULT_NEUTRAL_BAND_CANDIDATES,
+    neutral_band_metric_candidates: tuple[float, ...] = DEFAULT_NEUTRAL_BAND_METRIC_CANDIDATES,
     temperature_candidates: tuple[float, ...] = DEFAULT_TEMPERATURE_CANDIDATES,
 ) -> dict[str, object]:
     features = build_leading_features(close, volume)
@@ -152,6 +187,9 @@ def diagnose_target(
     balance_by_band = {
         str(band): class_balance(next_returns, band) for band in neutral_band_candidates
     }
+    walk_forward_by_band = walk_forward_metrics_by_neutral_band(
+        features, close[target], train_size=train_size, neutral_band_candidates=neutral_band_metric_candidates
+    )
 
     # Run the walk-forward with the current production default (see
     # forward.DEFAULT_MODEL_PARAMETERS: neutral_band=0.005, lambda_reg=0.10,
@@ -175,6 +213,7 @@ def diagnose_target(
         "target": target,
         "rows": len(result.predictions),
         "class_balance_by_neutral_band": balance_by_band,
+        "walk_forward_metrics_by_neutral_band": walk_forward_by_band,
         "calibration": calibration,
         "calibration_by_temperature": calibration_temperature_sweep,
         "overall_trade_coverage": float((result.predictions["action"] != "NO_TRADE").mean()),

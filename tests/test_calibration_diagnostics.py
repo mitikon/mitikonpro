@@ -10,6 +10,7 @@ from leading_signal_lambda import (
     class_balance,
     diagnose_target,
     rescale_probabilities,
+    walk_forward_metrics_by_neutral_band,
     walk_forward_validate,
 )
 
@@ -57,6 +58,23 @@ def test_diagnose_target_reports_balance_and_calibration_without_changing_predic
     assert report["calibration"]
     assert 0.0 <= report["overall_trade_coverage"] <= 1.0
     assert "1.0" in report["calibration_by_temperature"]
+    assert "0.005" in report["walk_forward_metrics_by_neutral_band"]
+    for metrics in report["walk_forward_metrics_by_neutral_band"].values():
+        assert "direction_accuracy" in metrics
+        assert "annualized_return" in metrics
+        assert "trade_coverage" in metrics
+
+
+def test_walk_forward_metrics_by_neutral_band_refits_per_band():
+    close, volume = sample_market()
+    features = build_leading_features(close, volume)
+    metrics = walk_forward_metrics_by_neutral_band(
+        features, close["SPY"], train_size=252, neutral_band_candidates=(0.001, 0.01)
+    )
+    assert set(metrics) == {"0.001", "0.01"}
+    for entry in metrics.values():
+        assert 0.0 <= entry["direction_accuracy"] <= 1.0
+        assert 0.0 <= entry["trade_coverage"] <= 1.0
 
 
 def test_rescale_probabilities_at_temperature_one_matches_the_stored_confidence():

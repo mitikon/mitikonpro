@@ -48,6 +48,7 @@ from .calibration_diagnostics import (
     class_balance,
     diagnose_target,
     rescale_probabilities,
+    walk_forward_metrics_by_neutral_band,
 )
 from .collector import DailyMarketCollector, MarketDataset, DEFAULT_UNIVERSE
 from .paper_backtest import PaperBacktestResult, run_paper_backtest
@@ -98,6 +99,7 @@ __all__ = [
     "class_balance",
     "diagnose_target",
     "rescale_probabilities",
+    "walk_forward_metrics_by_neutral_band",
     "DailyMarketCollector",
     "MarketDataset",
     "DEFAULT_UNIVERSE",
