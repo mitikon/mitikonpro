@@ -1,0 +1,60 @@
+name: Independent market RSI learning loop
+
+on:
+  workflow_dispatch:
+  schedule:
+    # Runs after every normal/early US close; the frozen next-session signal is
+    # therefore available many hours before the following market opens.
+    - cron: "45 2 * * 2-6"
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  learn-and-forecast:
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - run: python -m pip install '.[data,test]'
+      - run: python -m pytest -q
+      - name: Collect completed market data
+        run: leading-lambda-validate --start 2015-01-01 --output artifacts/independent
+      - name: Restore prior immutable loop records
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          mkdir -p artifacts/prior
+          mapfile -t run_ids < <(gh api "repos/${GITHUB_REPOSITORY}/actions/workflows/independent-market-rsi.yml/runs?status=success&per_page=30" --jq '.workflow_runs[].id')
+          for run_id in "${run_ids[@]}"; do
+            gh run download "$run_id" --repo "$GITHUB_REPOSITORY" --pattern 'independent-market-rsi-*' --dir "artifacts/prior/$run_id" || true
+          done
+      - name: Settle, learn and freeze the next independent signal
+        shell: bash
+        run: |
+          latest_prior=$(find artifacts/prior -mindepth 1 -maxdepth 1 -type d -printf '%f\n' | sort -rn | head -1)
+          previous=$(find "artifacts/prior/$latest_prior" -name 'forecast.json' -print -quit 2>/dev/null || true)
+          state=$(find "artifacts/prior/$latest_prior" -name 'state.json' -print -quit 2>/dev/null || true)
+          mkdir -p artifacts/independent/loop
+          settlements=()
+          if [ -n "$previous" ]; then
+            leading-lambda-independent settle --input-dir artifacts/independent/raw --forecast "$previous" --output artifacts/independent/loop/settlement.json || true
+          fi
+          while IFS= read -r path; do settlements+=(--settlement "$path"); done < <(find artifacts/prior artifacts/independent -name 'settlement*.json' -print)
+          state_args=()
+          if [ -n "$state" ]; then state_args=(--state "$state"); fi
+          leading-lambda-independent learn "${state_args[@]}" "${settlements[@]}" --state-output artifacts/independent/loop/state.json --report-output artifacts/independent/loop/learning_report.json
+          leading-lambda-independent forecast --input-dir artifacts/independent/raw --state artifacts/independent/loop/state.json --output artifacts/independent/loop/forecast.json
+      - name: Upload reports and immutable learning records
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: independent-market-rsi-${{ github.run_number }}
+          path: artifacts/independent
+          if-no-files-found: error
+          retention-days: 90
