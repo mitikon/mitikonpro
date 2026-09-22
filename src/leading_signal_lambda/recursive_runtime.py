@@ -25,6 +25,7 @@ from .recursive_self_improvement import (
     MarketRecursiveImprovementGate,
     MarketRsiCandidate,
     candidate_manifest_digest,
+    canonicalize_parameter_keys,
     parameter_manifest_digest,
     sequential_loss_improvement_test,
     trial_manifest_digest,
@@ -141,16 +142,20 @@ MUTATION_SCHEDULE: tuple[tuple[str, tuple[object, ...]], ...] = (
 
 
 def _next_parameters(active: Mapping[str, object], attempt: int) -> dict[str, object]:
+    # A not-yet-promoted active configuration inherited from a pre-rename
+    # artifact may still carry old rsi_* keys; canonicalize once here so
+    # every newly minted candidate uses only the current parameter names.
+    base = canonicalize_parameter_keys(active)
     search_size = 1
     for _, choices in MUTATION_SCHEDULE:
         search_size *= len(choices)
     for offset in range(search_size):
         cursor = (attempt + offset) % search_size
-        parameters = deepcopy(dict(active))
+        parameters = deepcopy(base)
         for name, choices in MUTATION_SCHEDULE:
             parameters[name] = deepcopy(choices[cursor % len(choices)])
             cursor //= len(choices)
-        if parameters != dict(active):
+        if parameters != base:
             return parameters
     raise RuntimeError("recursive RSI search space contains no alternative configuration")
 

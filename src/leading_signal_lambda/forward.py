@@ -23,6 +23,7 @@ from .market_calendar import NYSETradingCalendar
 from .model import LeadingLambdaClassifier
 from .signals import REQUIRED_SYMBOLS, build_leading_features, build_training_set
 from .relative_strength_feature import RELATIVE_STRENGTH_FEATURE_VERSION, RELATIVE_STRENGTH_PERIODS
+from .recursive_self_improvement import canonicalize_parameter_keys
 from .recursive_runtime import (
     PARALLEL_CANDIDATES,
     bootstrap_state,
@@ -79,7 +80,11 @@ DEFAULT_MODEL_PARAMETERS: dict[str, object] = {
 def normalize_model_parameters(
     parameters: dict[str, object] | None = None,
 ) -> dict[str, object]:
-    values = {**DEFAULT_MODEL_PARAMETERS, **(parameters or {})}
+    # A parameters mapping loaded from a pre-rename artifact may still use the
+    # old rsi_* keys; canonicalize before merging so a learned value is never
+    # silently dropped in favor of the default.
+    supplied = canonicalize_parameter_keys(parameters or {})
+    values = {**DEFAULT_MODEL_PARAMETERS, **supplied}
     values["relative_strength_periods"] = [int(value) for value in values["relative_strength_periods"]]
     values["relative_strength_feature_set"] = [str(value) for value in values["relative_strength_feature_set"]]
     values["relative_strength_feature_weight"] = float(values["relative_strength_feature_weight"])

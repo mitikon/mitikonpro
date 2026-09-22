@@ -3,11 +3,16 @@ import json
 
 import pytest
 
-from leading_signal_lambda.forward import DEFAULT_MODEL_PARAMETERS
+from leading_signal_lambda.forward import DEFAULT_MODEL_PARAMETERS, normalize_model_parameters
+from leading_signal_lambda.recursive_self_improvement import (
+    MarketRsiCandidate,
+    parameter_manifest_digest,
+)
 from leading_signal_lambda.recursive_runtime import (
     LEGACY_RUNTIME_SCHEMA_VERSION,
     PARALLEL_CANDIDATES,
     _new_candidate,
+    _next_parameters,
     bootstrap_state,
     candidate_manifest_digest,
     ensure_candidate_slots,
@@ -143,6 +148,70 @@ def _legacy_v1_state(created):
     legacy_state["candidate"] = candidate.sealed_payload()
     legacy_state["candidate_manifest_sha256"] = candidate_manifest_digest(candidate)
     return legacy_state, candidate
+
+
+def test_pre_rename_rsi_parameter_keys_still_load_and_resolve(tmp_path):
+    """Reproduces production state frozen before the rsi_* -> relative_strength_* rename.
+
+    Historical state and candidates are hash-locked and must load exactly as
+    written, without their parameter keys being rewritten in place.
+    """
+    created = datetime(2026, 9, 15, tzinfo=UTC)
+    old_style_parameters = {
+        "rsi_periods": [5, 7, 14, 21],
+        "rsi_feature_set": ["level", "velocity3", "cross50", "extreme_state"],
+        "rsi_feature_weight": 1.0,
+        "feature_lags": 5,
+        "neutral_band": 0.001,
+        "no_trade_threshold": 0.45,
+    }
+    old_style_candidate_parameters = {**old_style_parameters, "rsi_feature_weight": 1.25}
+    candidate = MarketRsiCandidate(
+        candidate_id="market-rsi-g1-a1",
+        parent_version="market-forward-v7-baseline",
+        generation=1,
+        created_at=created - timedelta(microseconds=1),
+        source_commit=COMMIT,
+        parameter_manifest_sha256=parameter_manifest_digest(old_style_candidate_parameters),
+        parameters=old_style_candidate_parameters,
+    )
+    legacy_state = {
+        "schema_version": LEGACY_RUNTIME_SCHEMA_VERSION,
+        "active_model": {
+            "model_id": "market-forward-v7-baseline",
+            "generation": 0,
+            "parameters": dict(old_style_parameters),
+            "promotion_report_sha256": None,
+        },
+        "attempt": 1,
+        "candidate": candidate.sealed_payload(),
+        "candidate_manifest_sha256": candidate_manifest_digest(candidate),
+        "trials": [],
+        "evaluations": [],
+        "pending_trial": None,
+        "completed_candidates": [],
+        "previous_state_sha256": None,
+        "updated_at": created.isoformat(),
+    }
+    legacy_path = write_state(legacy_state, tmp_path / "pre_rename_state.json")
+
+    loaded = load_state(legacy_path)
+
+    assert loaded["active_model"]["parameters"] == old_style_parameters
+    assert loaded["candidate_slots"][0]["candidate"]["parameters"] == old_style_candidate_parameters
+    # The old spellings must still resolve to the right values, not silently
+    # fall back to defaults because the new keys were absent.
+    resolved = normalize_model_parameters(loaded["active_model"]["parameters"])
+    assert resolved["relative_strength_periods"] == [5, 7, 14, 21]
+    assert resolved["relative_strength_feature_weight"] == 1.0
+    resolved_candidate = normalize_model_parameters(
+        loaded["candidate_slots"][0]["candidate"]["parameters"]
+    )
+    assert resolved_candidate["relative_strength_feature_weight"] == 1.25
+    # Any newly minted candidate must use only the current parameter names.
+    next_parameters = _next_parameters(loaded["active_model"]["parameters"], attempt=1)
+    assert "rsi_feature_weight" not in next_parameters
+    assert "relative_strength_feature_weight" in next_parameters
 
 
 def test_legacy_v1_state_migrates_and_tops_up_to_parallel_slots(tmp_path):
