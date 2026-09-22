@@ -68,7 +68,7 @@ def test_learning_requires_20_future_sessions_and_never_attaches_to_pca(tmp_path
         results = {}
         for band in state["candidate_neutral_bands"]:
             results[f"neutral_band={band:.6f}"] = {
-                "neutral_band": band, "direction_accuracy": 0.5 + (0.1 if band == 0.002 else 0),
+                "neutral_band": band, "direction_accuracy": 0.5 + (0.1 if band == 0.0075 else 0),
                 "mean_absolute_error": 0.01, "primary_trade_return": 0.001,
                 "primary_trade_correct": True, "upside_exact_hit": False, "downside_exact_hit": False, "rows": [],
             }

@@ -128,7 +128,7 @@ def build_leading_features(
 def build_training_set(
     features: pd.DataFrame,
     target_close: pd.Series,
-    neutral_band: float = 0.001,
+    neutral_band: float = 0.005,
 ) -> tuple[pd.DataFrame, pd.Series, pd.Series]:
     """当日までの特徴と翌営業日リターンを整列し、リーク無しの教師データを作る。"""
     observed_target = target_close.astype(float).dropna()

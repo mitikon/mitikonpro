@@ -42,7 +42,13 @@ from .error_classification import (
     summarize_error_classification,
 )
 from .validation import WalkForwardResult, walk_forward_validate
-from .calibration_diagnostics import calibration_bins, class_balance, diagnose_target
+from .calibration_diagnostics import (
+    calibration_bins,
+    calibration_by_temperature,
+    class_balance,
+    diagnose_target,
+    rescale_probabilities,
+)
 from .collector import DailyMarketCollector, MarketDataset, DEFAULT_UNIVERSE
 from .paper_backtest import PaperBacktestResult, run_paper_backtest
 from .paper_pca_sub import PaperPcaSubModel, PaperSignal
@@ -88,8 +94,10 @@ __all__ = [
     "summarize_error_classification",
     "walk_forward_validate",
     "calibration_bins",
+    "calibration_by_temperature",
     "class_balance",
     "diagnose_target",
+    "rescale_probabilities",
     "DailyMarketCollector",
     "MarketDataset",
     "DEFAULT_UNIVERSE",

@@ -30,6 +30,7 @@ ALLOWED_CANDIDATE_PARAMETERS = frozenset(
         "feature_lags",
         "neutral_band",
         "no_trade_threshold",
+        "confidence_temperature",
         # Pre-rename spellings ("RSI" here always meant Recursive
         # Self-Improvement, never the technical indicator, but earlier
         # candidate parameters were still named after it). Already-sealed

@@ -23,6 +23,14 @@ class LeadingLambdaClassifier:
 
     lambda_reg=0.10 は共分散行列の縮約率、variance_target=0.90 は
     PCAで保持する累積説明分散率であり、役割を混同しない。
+
+    confidence_temperature はクラス別距離から確率へ変換するsoftmaxの
+    温度である。1.0は無変換（従来通り）。2026-09-22の較正診断
+    （calibration_diagnostics）で、確信度90-100%と申告した予測が
+    実際には45-49%しか当たっていない過信（calibration gap約0.5）が
+    実データで確認されたため、1.0より大きい値で確率分布を滑らかにし
+    申告確信度と実測正解率を近づける調整弁として追加した。距離や
+    事前確率そのものは変えず、確率への写像だけを緩める。
     """
 
     def __init__(
@@ -32,16 +40,20 @@ class LeadingLambdaClassifier:
         no_trade_threshold: float = 0.45,
         min_samples: int = 60,
         feature_family_weights: dict[str, float] | None = None,
+        confidence_temperature: float = 1.0,
     ) -> None:
         if not 0.0 <= lambda_reg <= 1.0:
             raise ValueError("lambda_reg must be in [0, 1]")
         if not 0.0 < variance_target <= 1.0:
             raise ValueError("variance_target must be in (0, 1]")
+        if not confidence_temperature > 0.0:
+            raise ValueError("confidence_temperature must be > 0")
         self.lambda_reg = lambda_reg
         self.variance_target = variance_target
         self.no_trade_threshold = no_trade_threshold
         self.min_samples = min_samples
         self.feature_family_weights = dict(feature_family_weights or {})
+        self.confidence_temperature = float(confidence_temperature)
         if any(not 0.0 <= float(value) <= 3.0 for value in self.feature_family_weights.values()):
             raise ValueError("feature family weights must be in [0, 3]")
 
@@ -111,7 +123,7 @@ class LeadingLambdaClassifier:
         for cls, (center, precision, prior) in self.class_stats_.items():
             delta = score - center
             distance = float(delta @ precision @ delta)
-            logits[cls] = -0.5 * distance + np.log(max(prior, 1e-12))
+            logits[cls] = (-0.5 * distance + np.log(max(prior, 1e-12))) / self.confidence_temperature
         peak = max(logits.values())
         weights = {cls: np.exp(value - peak) for cls, value in logits.items()}
         total = sum(weights.values())

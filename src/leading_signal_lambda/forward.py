@@ -36,7 +36,7 @@ from .recursive_runtime import (
 )
 
 
-SCHEMA_VERSION = "market-forward-v7"
+SCHEMA_VERSION = "market-forward-v8"
 TRADE_SELECTION_RULE = "maximum_absolute_predicted_return_v1"
 EXTREME_SELECTION_RULE = "predicted_return_extremes_v1"
 TARGET_METADATA: dict[str, tuple[str, str]] = {
@@ -72,8 +72,20 @@ DEFAULT_MODEL_PARAMETERS: dict[str, object] = {
     "relative_strength_feature_set": ["level", "velocity3", "cross50", "extreme_state"],
     "relative_strength_feature_weight": 1.0,
     "feature_lags": 5,
-    "neutral_band": 0.001,
+    # 2026-09-22 calibration_diagnostics on real SPY/QQQ walk-forward data showed
+    # 0.001 leaves the no-trade class at ~9-11% of sessions, forcing a near-binary
+    # up/down call almost every day. 0.005 raises it to ~46%, a materially
+    # healthier three-way split; see docs/PAPER_PCA_SUB_SPEC.md history and the
+    # calibration-diagnostics workflow artifacts for the measured trade-off.
+    "neutral_band": 0.005,
     "no_trade_threshold": 0.45,
+    # Softens the distance-to-probability softmax in LeadingLambdaClassifier.
+    # 1.0 = unchanged. The same 2026-09-22 diagnostic found the 90-100% stated
+    # confidence bin (~75% of all predictions) realizing only ~45-49% accuracy
+    # (calibration gap ~0.5). Kept at 1.0 until an empirical grid search (via
+    # the calibration-diagnostics workflow, which alone has real market data
+    # access) selects a value that measurably closes that gap.
+    "confidence_temperature": 1.0,
 }
 
 
@@ -91,10 +103,13 @@ def normalize_model_parameters(
     values["feature_lags"] = int(values["feature_lags"])
     values["neutral_band"] = float(values["neutral_band"])
     values["no_trade_threshold"] = float(values["no_trade_threshold"])
+    values["confidence_temperature"] = float(values["confidence_temperature"])
     if not 0.0 <= values["neutral_band"] <= 0.02:
         raise ValueError("neutral_band must be in [0, 0.02]")
     if not 0.0 <= values["no_trade_threshold"] <= 1.0:
         raise ValueError("no_trade_threshold must be in [0, 1]")
+    if not 0.0 < values["confidence_temperature"] <= 10.0:
+        raise ValueError("confidence_temperature must be in (0, 10]")
     return values
 
 
@@ -132,6 +147,7 @@ class FrozenMarketSignal:
     lambda_reg: float
     variance_target: float
     neutral_band: float
+    confidence_temperature: float
     relative_strength_feature_version: str
     relative_strength_periods: tuple[int, ...]
     input_sha256: str
@@ -235,6 +251,7 @@ def generate_forward_signals(
             no_trade_threshold=float(parameters["no_trade_threshold"]),
             min_samples=60,
             feature_family_weights={"rs": float(parameters["relative_strength_feature_weight"])},
+            confidence_temperature=float(parameters["confidence_temperature"]),
         ).fit(X, y)
         prediction = model.predict_one(latest)
         class_mean_returns = next_returns.groupby(y).mean().to_dict()
@@ -269,6 +286,7 @@ def generate_forward_signals(
                 lambda_reg=0.10,
                 variance_target=0.90,
                 neutral_band=neutral_band,
+                confidence_temperature=float(parameters["confidence_temperature"]),
                 relative_strength_feature_version=RELATIVE_STRENGTH_FEATURE_VERSION,
                 relative_strength_periods=tuple(parameters["relative_strength_periods"]),
                 input_sha256=digest,
@@ -368,7 +386,13 @@ def carry_forward_same_session(
     document = json.loads(source.read_text(encoding="utf-8"))
     signals = document.get("signals", [])
     current_session = _signal_session(dataset).date().isoformat()
-    compatible_versions = {"market-forward-v4", "market-forward-v5", "market-forward-v6", SCHEMA_VERSION}
+    compatible_versions = {
+        "market-forward-v4",
+        "market-forward-v5",
+        "market-forward-v6",
+        "market-forward-v7",
+        SCHEMA_VERSION,
+    }
     if (
         document.get("schema_version") not in compatible_versions
         or not signals
