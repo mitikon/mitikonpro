@@ -35,19 +35,44 @@ jobs:
           cache: pip
       - name: Install
         run: python -m pip install --upgrade pip && python -m pip install '.[data,test]'
+      - name: Check XNYS trading calendar
+        id: market_calendar
+        shell: bash
+        run: |
+          if [ "${{ github.event_name }}" != "schedule" ]; then
+            echo "should_run=true" >> "$GITHUB_OUTPUT"
+            echo "Not a scheduled run; calendar gate bypassed."
+            exit 0
+          fi
+          # calendar-check appends its own should_run to $GITHUB_OUTPUT when
+          # that variable is set; blank it so only the decision below is emitted.
+          GITHUB_OUTPUT= leading-lambda-independent calendar-check > calendar_decision.json
+          cat calendar_decision.json
+          completed=$(python -c "import json;print(json.load(open('calendar_decision.json'))['completed_session'])")
+          expected=$(date -u -d 'yesterday' +%F)
+          if [ "$completed" = "$expected" ]; then
+            echo "should_run=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "should_run=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::XNYS had no session on ${expected} (latest completed session: ${completed}). Validation skipped without changing state."
+          fi
       - name: Install malware scanner for external data guard
+        if: steps.market_calendar.outputs.should_run == 'true'
         run: |
           sudo apt-get update
           sudo apt-get install -y clamav
           sudo systemctl stop clamav-freshclam.service || true
           sudo freshclam --quiet || sudo freshclam --quiet
       - name: Unit tests
+        if: steps.market_calendar.outputs.should_run == 'true'
         run: python -m pytest -q
       - name: Run completed-daily-data validation
+        if: steps.market_calendar.outputs.should_run == 'true'
         env:
           START_DATE: ${{ inputs.start_date || '2015-01-01' }}
         run: leading-lambda-validate --start "$START_DATE" --output artifacts/validation
       - name: Download previous frozen signal and cumulative histories
+        if: steps.market_calendar.outputs.should_run == 'true'
         continue-on-error: true
         env:
           GH_TOKEN: ${{ github.token }}
@@ -66,6 +91,7 @@ jobs:
               --pattern "leading-lambda-validation-*" --dir "artifacts/history-sources/$run_id" || true
           done
       - name: Freeze next-session signals
+        if: steps.market_calendar.outputs.should_run == 'true'
         env:
           START_DATE: ${{ inputs.start_date || '2015-01-01' }}
         run: |
@@ -97,7 +123,7 @@ jobs:
             leading-lambda-forward --input-dir artifacts/validation/raw --output artifacts/validation/forward_signal.json
           fi
       - name: Upload immutable validation result
-        if: always()
+        if: always() && steps.market_calendar.outputs.should_run == 'true'
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: leading-lambda-validation-${{ github.run_number }}
